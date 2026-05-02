@@ -1,0 +1,455 @@
+/* ── Loading screen ─────────────────────────────────────────── */
+
+.app-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Sign-in screen ─────────────────────────────────────────── */
+
+.si-root {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  /* Cap width so it stays phone-proportioned on wide viewports */
+  max-width: 480px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* Top white section — 40% of viewport height */
+.si-hero {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 24px 32px;
+  background: #ffffff;
+}
+
+.si-icon-circle {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: rgba(13, 148, 136, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.si-app-name {
+  font-size: 36px;
+  font-weight: 800;
+  color: #0D9488;
+  letter-spacing: -0.5px;
+}
+
+.si-app-sub {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: #6b7280;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+/* Dark teal panel — slides up from bottom, 60% */
+.si-panel {
+  flex: 3;
+  background: #0F766E;
+  border-radius: 28px 28px 0 0;
+  padding: 28px 24px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── Tabs ───────────────────────────────────────────────────── */
+
+.si-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.si-tab {
+  flex: 1;
+  padding: 10px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.si-tab--active {
+  color: #ffffff;
+  border-bottom-color: #ffffff;
+}
+
+/* ── Pill option rows (options view) ────────────────────────── */
+
+.si-pill-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  background: #ffffff;
+  color: #111827;
+  border: none;
+  border-radius: 9999px;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.si-pill-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.si-pill-btn:not(:disabled):active {
+  opacity: 0.85;
+}
+
+/* Solid white pill for Send OTP / Verify OTP */
+.si-pill-btn--action {
+  justify-content: center;
+  background: #ffffff;
+  color: #0F766E;
+  font-weight: 700;
+  font-size: 15px;
+  padding: 14px 16px;
+}
+
+.si-pill-icon-wrap {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.si-pill-icon--google {
+  background: #f3f4f6;
+}
+
+.si-pill-icon--phone {
+  background: rgba(13, 148, 136, 0.15);
+  color: #0D9488;
+}
+
+.si-google-svg {
+  width: 18px;
+  height: 18px;
+}
+
+.si-pill-label {
+  flex: 1;
+}
+
+.si-pill-chevron {
+  font-size: 20px;
+  line-height: 1;
+  color: #9ca3af;
+}
+
+/* ── Phone / OTP form fields ────────────────────────────────── */
+
+.si-panel-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 2px;
+}
+
+.si-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+  padding-left: 20px;
+  margin-bottom: -4px;
+}
+
+.si-pill-input {
+  width: 100%;
+  padding: 14px 20px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  border-radius: 9999px;
+  color: #ffffff;
+  font-size: 16px;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.si-pill-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.si-pill-input:focus {
+  border-color: rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.si-pill-input--otp {
+  letter-spacing: 0.4em;
+  text-align: center;
+  font-size: 26px;
+  font-weight: 700;
+  padding: 14px 24px;
+}
+
+.si-hint {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+.si-back {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px;
+  text-align: center;
+  transition: color 0.15s;
+}
+
+.si-back:not(:disabled):hover {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.si-back:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.si-error {
+  font-size: 13px;
+  color: #fca5a5;
+  text-align: center;
+  padding: 4px 8px;
+}
+
+/* Pushes to bottom of the panel regardless of content height */
+.si-footer {
+  margin-top: auto;
+  padding-top: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.3);
+  text-align: center;
+  text-transform: uppercase;
+}
+
+/* ── WhatsApp invite button ─────────────────────────────────── */
+
+.si-pill-btn--whatsapp {
+  justify-content: flex-start;
+  background: #25D366;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.si-pill-btn--whatsapp:not(:disabled):active {
+  opacity: 0.9;
+}
+
+.si-pill-btn--whatsapp:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Pill-shaped select ─────────────────────────────────────── */
+
+.si-pill-select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  /* Down-chevron encoded as inline SVG so there's no separate asset */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='rgba(255,255,255,0.6)' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 20px center;
+  padding-right: 44px;
+}
+
+.si-pill-select option {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+/* ── Dashboard ──────────────────────────────────────────────── */
+
+.db-root {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.db-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  background: #0D9488;
+  color: #ffffff;
+}
+
+.db-logo {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.db-brand {
+  font-size: 18px;
+  font-weight: 700;
+  flex: 1;
+  color: #ffffff;
+}
+
+.db-signout {
+  font-size: 13px;
+  padding: 6px 16px;
+  border-color: rgba(255, 255, 255, 0.6);
+  color: #ffffff;
+}
+
+.db-signout:hover {
+  border-color: #ffffff;
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.db-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  text-align: center;
+  gap: 8px;
+}
+
+.db-eyebrow {
+  font-size: 14px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+}
+
+.db-household {
+  font-size: 32px;
+  font-weight: 800;
+  color: #0D9488;
+  letter-spacing: -0.5px;
+  margin: 0;
+}
+
+.db-user {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.db-placeholder {
+  margin-top: 32px;
+  padding: 24px 32px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ── Welcome screen ─────────────────────────────────────────── */
+
+.welcome-root {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+
+.welcome-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 40px 32px;
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.welcome-title {
+  font-size: 24px;
+  margin-top: 8px;
+}
+
+.welcome-sub {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+/* Reuse for the sign-out button on the welcome screen */
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 24px;
+  background: transparent;
+  color: var(--brand);
+  border: 1.5px solid var(--brand);
+  border-radius: 9999px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn-secondary:hover {
+  opacity: 0.8;
+}
