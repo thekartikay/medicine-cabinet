@@ -41,3 +41,9 @@ ios/
 *.sln
 *.sw?
 CLAUDE.md
+
+# Claude Code per-user settings
+.claude/settings.local.json
+
+# Design / spec PDFs — large render artifacts, regenerated from source
+Documents/*.pdf
