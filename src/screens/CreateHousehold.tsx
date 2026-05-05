@@ -1,14 +1,23 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { User } from 'firebase/auth'
-import { createHousehold } from '../services/firestoreService'
+import { httpsCallable } from 'firebase/functions'
+import { functions } from '../lib/firebase'
 
 interface Props {
   user: User
   onCreated: (household: { hId: string; name: string }) => void
+  onBack: () => void
 }
 
-export function CreateHousehold({ user, onCreated }: Props) {
+// createHousehold callable. Only place allowed to write user.householdId and
+// to set the admin custom claim — both forbidden to clients by Security Rules.
+const createHouseholdFn = httpsCallable<
+  { householdName: string },
+  { hId: string; name: string }
+>(functions, 'createHousehold')
+
+export function CreateHousehold({ user, onCreated, onBack }: Props) {
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -20,8 +29,11 @@ export function CreateHousehold({ user, onCreated }: Props) {
     setLoading(true)
     setError('')
     try {
-      const household = await createHousehold(user, trimmed)
-      onCreated(household)
+      const result = await createHouseholdFn({ householdName: trimmed })
+      // Force the auth token to refresh so the freshly-set hId/role claims
+      // are present before any household-scoped Firestore reads run.
+      await user.getIdToken(true)
+      onCreated(result.data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create household. Please try again.')
     } finally {
@@ -63,6 +75,16 @@ export function CreateHousehold({ user, onCreated }: Props) {
         </form>
 
         {error && <p className="si-error" role="alert">{error}</p>}
+
+        <button
+          type="button"
+          className="si-back"
+          onClick={onBack}
+          disabled={loading}
+        >
+          ← Back
+        </button>
+
         <p className="si-footer">🔒 Secure Encrypted Access</p>
       </div>
     </div>

@@ -24,8 +24,25 @@ export const regimenPath = (hId: string, tId: string, rId: string) =>
   `households/${hId}/treatments/${tId}/regimens/${rId}`
 export const dosePath = (hId: string, tId: string, slotId: string) =>
   `households/${hId}/treatments/${tId}/logs/${slotId}`
+export const dosesCollectionPath = (hId: string, tId: string) =>
+  `households/${hId}/treatments/${tId}/logs`
 export const todaySummaryPath = (hId: string, date: string) =>
   `households/${hId}/todaySummary/${date}`
+export const cabinetsCollectionPath = (hId: string) => `households/${hId}/cabinets`
+export const itemsCollectionPath = (hId: string, cId: string) =>
+  `households/${hId}/cabinets/${cId}/items`
+export const treatmentsCollectionPath = (hId: string) => `households/${hId}/treatments`
+export const regimensCollectionPath = (hId: string, tId: string) =>
+  `households/${hId}/treatments/${tId}/regimens`
+export const membersCollectionPath = (hId: string) => `households/${hId}/members`
+export const notificationsCollectionPath = (hId: string) =>
+  `households/${hId}/notifications`
+export const notificationPath = (hId: string, notifId: string) =>
+  `households/${hId}/notifications/${notifId}`
+export const restockRequestsCollectionPath = (hId: string) =>
+  `households/${hId}/restockRequests`
+export const restockRequestPath = (hId: string, requestId: string) =>
+  `households/${hId}/restockRequests/${requestId}`
 
 export function buildSlotId(
   tId: string,

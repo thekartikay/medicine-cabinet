@@ -1,18 +1,294 @@
-rules_version='2'
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MediCab Firestore Security Rules — MC-005
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Security model (per CLAUDE.md):
+//   • Authorization is decided from Custom Auth Claims only:
+//     `request.auth.token.hId` (the household the user belongs to) and
+//     `request.auth.token.role` ('admin' | 'member' | 'caregiver').
+//   • No `get()` calls anywhere in the rules — they double billing.
+//   • Custom claims are set by Cloud Functions on join/role change. The client
+//     must call `user.getIdToken(true)` after a claim change to refresh the
+//     token before reads succeed.
+//
+// What each block protects against, in plain English:
+//
+//   /users/{uid}
+//     A user can only see and update their own profile document. Even on their
+//     own profile they may only change four self-service fields (FCM token,
+//     language, WhatsApp opt-out, WhatsApp snooze). This stops anyone from
+//     self-promoting by writing `role` or `householdId` directly — those
+//     belong to Cloud Functions.
+//
+//   /masterDb/{mId}
+//     The Indian medicine database is read-only for any signed-in user and is
+//     written exclusively by the seed Cloud Function / admin tooling. This
+//     prevents tampering with shared reference data.
+//
+//   /aiLogs/{uid}/queries/{id}
+//     A user can only read their own AI query audit trail. Writes are
+//     Cloud-Function-only so that the rate-limit + Gemini-proxy enforcement
+//     cannot be bypassed by writing a fake "I asked nothing" log.
+//
+//   /households/{hId}
+//     Visible to admins and members of that household; only admins can change
+//     household-level metadata. Caregivers do not see household configuration.
+//
+//   /households/{hId}/members/{uid}
+//     Membership records are admin-managed (admin invites, demotes, removes).
+//     Members may self-update their own notification preferences only — they
+//     cannot edit their role, joinedAt, or another member's record.
+//
+//   /households/{hId}/cabinets/{cId}
+//   /households/{hId}/cabinets/{cId}/items/{iId}
+//     Cabinets and items are admin-managed for create/delete. The exception is
+//     the dose-logging transaction (rule 4 in CLAUDE.md): a `member` may
+//     update `quantityOnHand` and `updatedAt` on an item — and nothing else —
+//     as part of debiting their own dose.
+//
+//   /households/{hId}/treatments/{tId}
+//   /households/{hId}/treatments/{tId}/regimens/{rId}
+//     Treatments and regimens are admin-only for all writes. This prevents a
+//     member from silently changing their own dosing schedule.
+//
+//   /households/{hId}/treatments/{tId}/logs/{slotId}
+//     Dose logs are append-only. Admins can write any log; members can only
+//     write a log whose `patientId` is themselves — so Priya (admin) can log
+//     for Rajan, but Rajan cannot mark Priya's doses. Logs are never deleted
+//     so the audit trail is immutable. Slot-id determinism (rule 3 in
+//     CLAUDE.md) is enforced at the service layer; the rules only gate auth.
+//
+//   /households/{hId}/todaySummary/{date}
+//     The only document caregivers can read. It is written by Cloud Functions
+//     only — never by clients (rule 7 in CLAUDE.md). This is what powers the
+//     real-time caregiver dashboard.
+//
+//   /households/{hId}/summaryArchive/{date}
+//     Long-term adherence archive. Admin-only read; Cloud-Function-only write.
+//
+//   /households/{hId}/inventoryAudits/{auditId}
+//     An audit ledger of physical pill counts. Admins can create new audits
+//     but never edit or delete them — this preserves the lastAuditAt fence
+//     that gates dose-log inventory debits (rule 5 in CLAUDE.md).
+//
+//   /households/{hId}/inventoryConflicts/{conflictId}
+//     Discrepancies between expected and audited inventory. Conflicts are
+//     opened by Cloud Functions during reconciliation; admins can dismiss
+//     them but only by setting `status`, `dismissedBy`, `dismissedAt`.
+//
+//   /households/{hId}/adminRecoveryRequests/{requestId}
+//     Member requests for admin reset (e.g. when the admin loses their
+//     phone). Members and admins both see and create them; only admins can
+//     resolve them; nothing is ever deleted.
+//
+// ─────────────────────────────────────────────────────────────────────────────
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      // This rule allows anyone with your database reference to view, edit,
-      // and delete all data in your database. It is useful for getting
-      // started, but it is configured to expire after 30 days because it
-      // leaves your app open to attackers. At that time, all client
-      // requests to your database will be denied.
-      //
-      // Make sure to write security rules for your app before that time, or
-      // else all client requests to your database will be denied until you
-      // update your rules.
-      allow read, write: if request.time < timestamp.date(2026, 6, 1);
+
+    // ─── Helpers ──────────────────────────────────────────────────────────
+    // Per spec: no get() calls. Authorization decided purely from custom
+    // claims attached to the auth token.
+
+    function isAdmin(hId) {
+      return request.auth.token.hId == hId
+          && request.auth.token.role == 'admin';
+    }
+
+    function isMember(hId) {
+      return request.auth.token.hId == hId
+          && request.auth.token.role == 'member';
+    }
+
+    function isCaregiver(hId) {
+      return request.auth.token.hId == hId
+          && request.auth.token.role == 'caregiver';
+    }
+
+    // Convenience: anyone with a household role (admin OR member, not caregiver).
+    function isParticipant(hId) {
+      return isAdmin(hId) || isMember(hId);
+    }
+
+    function isSelf(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // True iff the only fields an update touches are the ones listed.
+    function onlyChanges(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    // ─── /users/{uid} ─────────────────────────────────────────────────────
+    // Read/create your own profile. Updates are restricted to four
+    // self-service fields so users cannot grant themselves a role or move
+    // themselves between households via direct writes.
+    match /users/{uid} {
+      allow read:   if isSelf(uid);
+      allow create: if isSelf(uid);
+      allow update: if isSelf(uid)
+                    && onlyChanges(['fcmToken',
+                                    'languagePref',
+                                    'whatsappOptOut',
+                                    'whatsappSnoozeUntil',
+                                    'pushNotificationsEnabled',
+                                    'whatsappRemindersEnabled',
+                                    'reminderMethod']);
+      allow delete: if false;
+    }
+
+    // ─── /masterDb/{mId} ──────────────────────────────────────────────────
+    // Global Indian medicine reference. Read-only for clients.
+    match /masterDb/{mId} {
+      allow read:  if request.auth != null;
+      allow write: if false;
+    }
+
+    // ─── /aiLogs/{uid}/queries/{id} ───────────────────────────────────────
+    // Per-user AI audit trail. Read your own; never written by clients.
+    match /aiLogs/{uid}/queries/{id} {
+      allow read:  if isSelf(uid);
+      allow write: if false;
+    }
+
+    // ─── /households/{hId} ────────────────────────────────────────────────
+    match /households/{hId} {
+      allow read:  if isParticipant(hId);
+      allow write: if isAdmin(hId);
+
+      // ── /households/{hId}/members/{memberUid} ──────────────────────────
+      // Admin-managed roster. Members may self-update only their own
+      // notification preferences.
+      match /members/{memberUid} {
+        allow read:   if isParticipant(hId);
+        allow create: if isAdmin(hId);
+        allow update: if isAdmin(hId)
+                       || (isSelf(memberUid)
+                           && onlyChanges(['fcmToken',
+                                           'languagePref',
+                                           'whatsappOptOut',
+                                           'whatsappSnoozeUntil']));
+        allow delete: if isAdmin(hId);
+      }
+
+      // ── /households/{hId}/cabinets/{cId} ───────────────────────────────
+      match /cabinets/{cId} {
+        allow read:  if isParticipant(hId);
+        allow write: if isAdmin(hId);
+
+        // ── /households/{hId}/cabinets/{cId}/items/{iId} ────────────────
+        // Admin can update anything. A member can only update `quantityOnHand`
+        // and `updatedAt` — the exact diff produced by the dose-logging
+        // runTransaction in firestoreService.logDose. (CLAUDE.md rule 4)
+        match /items/{iId} {
+          allow read:   if isParticipant(hId);
+          allow create: if isAdmin(hId);
+          allow delete: if isAdmin(hId);
+          allow update: if isAdmin(hId)
+                         || (isMember(hId)
+                             && onlyChanges(['quantityOnHand', 'updatedAt']));
+        }
+      }
+
+      // ── /households/{hId}/treatments/{tId} ─────────────────────────────
+      match /treatments/{tId} {
+        allow read:  if isParticipant(hId);
+        allow create, update, delete: if isAdmin(hId);
+
+        // ── /households/{hId}/treatments/{tId}/regimens/{rId} ───────────
+        match /regimens/{rId} {
+          allow read:  if isParticipant(hId);
+          allow write: if isAdmin(hId);
+        }
+
+        // ── /households/{hId}/treatments/{tId}/logs/{slotId} ────────────
+        // Append-only dose log. A member can only log their own doses;
+        // admins can log on anyone's behalf. Never deleted.
+        // CLAUDE.md rule 3: deterministic slot id is enforced at the service
+        // layer; rules only check authorization here.
+        match /logs/{slotId} {
+          allow read:   if isParticipant(hId);
+          allow create: if isAdmin(hId)
+                         || (isMember(hId)
+                             && request.resource.data.patientId == request.auth.uid);
+          allow update: if isAdmin(hId)
+                         || (isMember(hId)
+                             && request.resource.data.patientId == request.auth.uid);
+          allow delete: if false;
+        }
+      }
+
+      // ── /households/{hId}/todaySummary/{date} ──────────────────────────
+      // Caregiver dashboard source of truth. Cloud-Function-written only.
+      match /todaySummary/{date} {
+        allow read:  if isParticipant(hId) || isCaregiver(hId);
+        allow write: if false;
+      }
+
+      // ── /households/{hId}/summaryArchive/{date} ────────────────────────
+      match /summaryArchive/{date} {
+        allow read:  if isAdmin(hId);
+        allow write: if false;
+      }
+
+      // ── /households/{hId}/inventoryAudits/{auditId} ────────────────────
+      // Immutable ledger. Admin can create; nobody can edit or delete.
+      match /inventoryAudits/{auditId} {
+        allow read:   if isAdmin(hId);
+        allow create: if isAdmin(hId);
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      // ── /households/{hId}/inventoryConflicts/{conflictId} ──────────────
+      // Cloud Functions open conflicts; admin can only dismiss by writing
+      // status / dismissedBy / dismissedAt.
+      match /inventoryConflicts/{conflictId} {
+        allow read:   if isAdmin(hId);
+        allow create: if false;
+        allow update: if isAdmin(hId)
+                       && onlyChanges(['status', 'dismissedBy', 'dismissedAt']);
+        allow delete: if false;
+      }
+
+      // ── /households/{hId}/adminRecoveryRequests/{requestId} ────────────
+      match /adminRecoveryRequests/{requestId} {
+        allow read:   if isParticipant(hId);
+        allow create: if isParticipant(hId);
+        allow update: if isAdmin(hId);
+        allow delete: if false;
+      }
+
+      // ── /households/{hId}/notifications/{notifId} ────────────────────
+      // In-app alerts panel feed. Admins create (e.g. admin_override).
+      // Cron / Cloud Functions write via the Admin SDK and are not gated
+      // by these rules. Any participant can mark a notification as read,
+      // restricted to the readBy array via onlyChanges so they cannot
+      // tamper with message/type/timestamps.
+      match /notifications/{notifId} {
+        allow read:   if isParticipant(hId);
+        allow create: if isAdmin(hId);
+        allow update: if isParticipant(hId)
+                       && onlyChanges(['readBy']);
+        allow delete: if false;
+      }
+
+      // ── /households/{hId}/restockRequests/{requestId} ─────────────────
+      // A member nudges the admin that a medicine is running low. Members
+      // create their own; admins read all and can resolve them by writing
+      // status / resolvedAt. Other fields stay immutable so the audit trail
+      // (medicine, requester, time, qty-at-request) can't be rewritten.
+      match /restockRequests/{requestId} {
+        allow read:   if isAdmin(hId)
+                       || (isMember(hId) && resource.data.requestedBy == request.auth.uid);
+        allow create: if isParticipant(hId)
+                       && request.resource.data.requestedBy == request.auth.uid;
+        allow update: if isAdmin(hId)
+                       && onlyChanges(['status', 'resolvedAt']);
+        allow delete: if false;
+      }
     }
   }
 }

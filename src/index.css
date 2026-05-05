@@ -1,39 +1,48 @@
 :root {
-  --brand: #0d9488;
-  --brand-dark: #0f766e;
-  --text: #374151;
-  --text-h: #111827;
-  --text-muted: #6b7280;
-  --bg: #f9fafb;
-  --surface: #ffffff;
-  --border: #e5e7eb;
-  --error: #dc2626;
-  --shadow: rgba(0, 0, 0, 0.08) 0 4px 12px;
+  /* MediCab design tokens */
+  --blueberry: #106470;
+  --robin:     #5DC1C8;
+  --sprout:    #5AB648;
+  --sunshine:  #FFB800;
+  --tangerine: #FF7033;
+  --daybreak:  #FF8985;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --gray-50:  #F9FAFB;
+  --gray-100: #F3F4F6;
+  --gray-200: #E5E7EB;
+  --gray-300: #D1D5DB;
+  --gray-400: #9CA3AF;
+  --gray-500: #6B7280;
+  --gray-600: #4B5563;
+  --gray-700: #374151;
+  --gray-900: #111827;
+
+  --brand: var(--blueberry);
+  --brand-dark: #0d5560;
+  --text: var(--gray-700);
+  --text-h: var(--gray-900);
+  --text-muted: var(--gray-500);
+  --bg: var(--gray-50);
+  --surface: #ffffff;
+  --border: var(--gray-200);
+  --error: var(--daybreak);
+  /* Distinct, tactile shadows so cards visibly sit above the surface */
+  --shadow:        0 4px 14px rgba(16, 100, 112, 0.10);
+  --shadow-float:  0 8px 28px rgba(16, 100, 112, 0.18);
+
+  --sans: 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 
   font: 16px/150% var(--sans);
   color: var(--text);
   background: var(--bg);
-  color-scheme: light dark;
+  color-scheme: light;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --brand: #14b8a6;
-    --brand-dark: #0d9488;
-    --text: #d1d5db;
-    --text-h: #f9fafb;
-    --text-muted: #9ca3af;
-    --bg: #111827;
-    --surface: #1f2937;
-    --border: #374151;
-    --error: #f87171;
-    --shadow: rgba(0, 0, 0, 0.4) 0 4px 12px;
-  }
-}
+/* Design is light-only; the dark-mode override that shipped with the Vite
+   starter has been removed because the brand palette is calibrated for a
+   light surface. */
 
 *, *::before, *::after { box-sizing: border-box; }
 

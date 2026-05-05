@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 interface Props {
   household: { hId: string; name: string }
+  adminName: string
   onDone: () => void
 }
 
@@ -13,28 +14,103 @@ const LANGUAGES = [
   { code: 'te', label: 'తెలుగు (Telugu)' },
 ]
 
-const INVITE_TEXT: Record<string, (name: string, hId: string) => string> = {
-  en: (name, hId) =>
-    `Hi ${name}! Join our family medicine cabinet on MediCab.\nDownload here: https://play.google.com/store/apps/details?id=com.medicab.app\nThen use this code to join: ${hId}`,
-  hi: (name, hId) =>
-    `नमस्ते ${name}! MediCab पर हमारे परिवार की दवाई कैबिनेट से जुड़ें।\nयहाँ डाउनलोड करें: https://play.google.com/store/apps/details?id=com.medicab.app\nजोड़ने का कोड: ${hId}`,
-  kn: (name, hId) =>
-    `ನಮಸ್ಕಾರ ${name}! MediCab ನಲ್ಲಿ ನಮ್ಮ ಕುಟುಂಬದ ಔಷಧ ಕ್ಯಾಬಿನೆಟ್‌ಗೆ ಸೇರಿ.\nಇಲ್ಲಿ ಡೌನ್‌ಲೋಡ್ ಮಾಡಿ: https://play.google.com/store/apps/details?id=com.medicab.app\nಸೇರಲು ಕೋಡ್: ${hId}`,
-  ta: (name, hId) =>
-    `வணக்கம் ${name}! MediCab-ல் எங்கள் குடும்ப மருந்து கேபினட்டில் சேரவும்.\nஇங்கே பதிவிறக்கவும்: https://play.google.com/store/apps/details?id=com.medicab.app\nசேர குறியீடு: ${hId}`,
-  te: (name, hId) =>
-    `నమస్కారం ${name}! MediCab లో మా కుటుంబ మందుల కేబినెట్‌లో చేరండి.\nఇక్కడ డౌన్‌లోడ్ చేయండి: https://play.google.com/store/apps/details?id=com.medicab.app\nచేరడానికి కోడ్: ${hId}`,
+interface InviteParams {
+  memberName: string
+  adminName: string
+  householdName: string
+  joinCode: string
 }
 
-export function InviteMember({ household, onDone }: Props) {
+// Deterministic 6-digit code derived from the household id. Must match the
+// computeJoinCode() in functions/src/index.ts byte-for-byte; both sides hash
+// `btoa(hId)` (browser) / `Buffer.from(hId).toString('base64')` (Node).
+export function computeJoinCode(hId: string): string {
+  const b64 = btoa(hId)
+  const digits = b64.replace(/[^0-9]/g, '')
+  return digits.slice(0, 6).padStart(6, '0')
+}
+
+// Each translation has the join code as a standalone line so it survives
+// WhatsApp's URL-encoding and is easy for the recipient to copy.
+const INVITE_TEXT: Record<string, (p: InviteParams) => string> = {
+  en: ({ memberName, adminName, householdName, joinCode }) =>
+`Hi ${memberName}! ${adminName} has added you to ${householdName} on MediCab.
+
+Your join code: ${joinCode}
+
+Steps:
+1. Download MediCab (coming soon to Play Store)
+2. Sign in with your phone number
+3. Enter code ${joinCode} when asked`,
+
+  hi: ({ memberName, adminName, householdName, joinCode }) =>
+`नमस्ते ${memberName}! ${adminName} ने आपको MediCab पर ${householdName} की दवा कैबिनेट में जोड़ा है।
+
+आपका 6-अंकीय जॉइन कोड: ${joinCode}
+
+जुड़ने के लिए:
+1. Play Store से MediCab डाउनलोड करें
+2. अपने फ़ोन नंबर से साइन इन करें
+3. 'Join a household' पर टैप करें और दर्ज करें: ${joinCode}`,
+
+  kn: ({ memberName, adminName, householdName, joinCode }) =>
+`ನಮಸ್ಕಾರ ${memberName}! ${adminName} ಅವರು ನಿಮ್ಮನ್ನು MediCab ನಲ್ಲಿ ${householdName} ಔಷಧ ಕ್ಯಾಬಿನೆಟ್‌ಗೆ ಸೇರಿಸಿದ್ದಾರೆ.
+
+ನಿಮ್ಮ 6-ಅಂಕಿಯ ಸೇರುವ ಕೋಡ್: ${joinCode}
+
+ಸೇರಲು:
+1. Play Store ನಿಂದ MediCab ಡೌನ್‌ಲೋಡ್ ಮಾಡಿ
+2. ನಿಮ್ಮ ಫೋನ್ ಸಂಖ್ಯೆಯಿಂದ ಸೈನ್ ಇನ್ ಮಾಡಿ
+3. 'Join a household' ಒತ್ತಿ ಮತ್ತು ನಮೂದಿಸಿ: ${joinCode}`,
+
+  ta: ({ memberName, adminName, householdName, joinCode }) =>
+`வணக்கம் ${memberName}! ${adminName} உங்களை MediCab-ல் ${householdName} மருந்து கேபினட்டில் சேர்த்துள்ளார்கள்.
+
+உங்கள் 6 இலக்க சேர்க்கை குறியீடு: ${joinCode}
+
+சேர:
+1. Play Store-ல் இருந்து MediCab பதிவிறக்கவும்
+2. உங்கள் தொலைபேசி எண்ணுடன் உள்நுழையவும்
+3. 'Join a household' தட்டவும், உள்ளிடவும்: ${joinCode}`,
+
+  te: ({ memberName, adminName, householdName, joinCode }) =>
+`నమస్కారం ${memberName}! ${adminName} మిమ్మల్ని MediCab లో ${householdName} మందుల కేబినెట్‌లో జోడించారు.
+
+మీ 6-అంకెల చేరే కోడ్: ${joinCode}
+
+చేరడానికి:
+1. Play Store నుండి MediCab డౌన్‌లోడ్ చేయండి
+2. మీ ఫోన్ నంబర్‌తో సైన్ ఇన్ చేయండి
+3. 'Join a household' నొక్కి నమోదు చేయండి: ${joinCode}`,
+}
+
+export function InviteMember({ household, adminName, onDone }: Props) {
   const [memberName, setMemberName] = useState('')
   const [lang, setLang] = useState('en')
+  const [copied, setCopied] = useState(false)
+
+  const joinCode = computeJoinCode(household.hId)
 
   function handleInvite() {
     const recipient = memberName.trim() || 'there'
-    const message = INVITE_TEXT[lang](recipient, household.hId)
+    const message = INVITE_TEXT[lang]({
+      memberName: recipient,
+      adminName,
+      householdName: household.name,
+      joinCode,
+    })
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
     onDone()
+  }
+
+  async function handleCopyCode() {
+    try {
+      await navigator.clipboard.writeText(joinCode)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Clipboard API is unavailable on some older webviews. Fall back silently.
+    }
   }
 
   return (
@@ -49,6 +125,19 @@ export function InviteMember({ household, onDone }: Props) {
 
       <div className="si-panel">
         <h2 className="si-panel-title">Add a family member</h2>
+
+        <div className="si-code-display" aria-label="Household join code">
+          <span className="si-code-label">JOIN CODE</span>
+          <span className="si-code-digits">{joinCode}</span>
+          <button
+            type="button"
+            className="si-code-copy"
+            onClick={handleCopyCode}
+            aria-label="Copy join code"
+          >
+            {copied ? 'Copied!' : 'Copy code'}
+          </button>
+        </div>
 
         <label className="si-label" htmlFor="member-name">Member's name</label>
         <input
