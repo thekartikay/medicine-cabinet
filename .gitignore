@@ -26,6 +26,9 @@ service-account.json
 # Vite cache
 .vite/
 
+# Firebase emulator export (regenerated on emulators:export — don't commit)
+emulator-data/
+
 # Capacitor
 android/
 ios/
