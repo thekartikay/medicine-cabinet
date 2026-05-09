@@ -28,9 +28,6 @@ const messaging = getMessaging()
 //
 // The client must call user.getIdToken(true) after this resolves so the
 // new claims appear in the token before any household-scoped reads.
-//
-// TODO(MC-005-followup): set enforceAppCheck: true once App Check is wired
-// into the Vite client (per CLAUDE.md rule 9).
 // ─── joinHousehold ───────────────────────────────────────────────────────────
 // Adds the calling user as a 'member' of the household whose 6-digit join code
 // matches what they typed. The join code is a deterministic hash of the hId
@@ -46,9 +43,6 @@ const messaging = getMessaging()
 // The client must call user.getIdToken(true) after this resolves so the new
 // claims appear in the token before any household-scoped reads.
 //
-// TODO(MC-005-followup): set enforceAppCheck: true once App Check is wired
-// into the Vite client (per CLAUDE.md rule 9). Tracked alongside createHousehold.
-//
 // TODO(MC-perf): scan-all-households is fine at MVP scale; switch to a
 // joinCodes/{code} -> hId index doc when we exceed ~1k households so each
 // joinHousehold call becomes O(1).
@@ -62,7 +56,7 @@ function computeJoinCode(hId: string): string {
 }
 
 export const joinHousehold = onCall(
-  { enforceAppCheck: false, region: 'asia-south1' },
+  { enforceAppCheck: true, region: 'asia-south1' },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Sign in required to join a household.')
@@ -143,7 +137,7 @@ export const joinHousehold = onCall(
 )
 
 export const createHousehold = onCall(
-  { enforceAppCheck: false },
+  { enforceAppCheck: true },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Sign in required to create a household.')
@@ -221,11 +215,6 @@ export const createHousehold = onCall(
 // timestamp by combining today's IST date with the slot's HH:MM and the
 // +05:30 offset, so the comparison to `now` works regardless of the
 // container's timezone.
-//
-// TODO(MC-005-followup): set enforceAppCheck on triggered/callable
-// functions once App Check is wired into the Vite client. Scheduled
-// functions don't accept caller App Check, so this only applies to the
-// testSendNotification callable below.
 
 // Returns IST today's date as YYYY-MM-DD using Swedish locale (ISO order).
 function todayISTDateString(now: Date): string {
@@ -386,7 +375,7 @@ export const scheduleDoseNotifications = onSchedule(
 // per project; the only abuse vector is "send a push to yourself", which is
 // harmless. Refuse if no token is registered.
 export const testSendNotification = onCall(
-  { enforceAppCheck: false, region: 'asia-south1' },
+  { enforceAppCheck: true, region: 'asia-south1' },
   async (request) => {
     let uid: string | undefined = request.auth?.uid
 
@@ -450,7 +439,7 @@ export const testSendNotification = onCall(
 // failed-precondition if the patient has no FCM token registered or has push
 // notifications disabled — the client surfaces these as a distinct toast.
 export const sendDoseReminder = onCall(
-  { enforceAppCheck: false, region: 'asia-south1' },
+  { enforceAppCheck: true, region: 'asia-south1' },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Must be signed in')
@@ -849,7 +838,7 @@ export const onRestockRequested = onDocumentCreated(
 // here bypasses rules. Used by Treatments.tsx for acute / prn treatments
 // where preserving history isn't valuable enough to keep the document.
 export const deleteTreatment = onCall(
-  { enforceAppCheck: false, region: 'asia-south1' },
+  { enforceAppCheck: true, region: 'asia-south1' },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Sign in required')
