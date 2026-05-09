@@ -11,6 +11,7 @@ import {
 } from '../services/firestoreService'
 import type { AppUser, HouseholdMember } from '../types'
 import { InviteMember, computeJoinCode } from './InviteMember'
+import { DeleteAccountSection } from './DeleteAccountSection'
 
 interface Props {
   hId: string
@@ -18,6 +19,7 @@ interface Props {
   currentUid: string
   currentUserName: string
   isAdmin: boolean
+  onAccountDeleted: () => void
 }
 
 const ROLE_LABEL: Record<HouseholdMember['role'], string> = {
@@ -34,7 +36,7 @@ const LANGUAGES = [
   { code: 'te', label: 'తెలుగు (Telugu)'   },
 ] as const
 
-export function SettingsTab({ hId, householdName, currentUid, currentUserName, isAdmin }: Props) {
+export function SettingsTab({ hId, householdName, currentUid, currentUserName, isAdmin, onAccountDeleted }: Props) {
   const [view, setView]                 = useState<'list' | 'invite'>('list')
   const [members, setMembers]           = useState<HouseholdMember[] | null>(null)
   const [appUser, setAppUser]           = useState<AppUser | null>(null)
@@ -270,6 +272,9 @@ export function SettingsTab({ hId, householdName, currentUid, currentUserName, i
           <span>Sign out</span>
         </button>
       </section>
+
+      {/* ─── Section 5 — Account & Privacy (MC-017a) ──────────────── */}
+      <DeleteAccountSection onDeleted={onAccountDeleted} />
 
       {import.meta.env.DEV && (
         <div style={{

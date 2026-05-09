@@ -43,6 +43,12 @@ export const restockRequestsCollectionPath = (hId: string) =>
   `households/${hId}/restockRequests`
 export const restockRequestPath = (hId: string, requestId: string) =>
   `households/${hId}/restockRequests/${requestId}`
+export const consentLogPath = (uid: string) => `consentLog/${uid}`
+
+// Bump this string whenever the privacy policy text in public/privacy-policy.md
+// changes — App.tsx forces re-consent on next sign-in for any user whose stored
+// policyVersion differs from this value.
+export const CURRENT_POLICY_VERSION = '2026-05-06'
 
 export function buildSlotId(
   tId: string,

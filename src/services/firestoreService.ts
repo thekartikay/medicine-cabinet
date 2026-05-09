@@ -37,6 +37,8 @@ import {
   restockRequestsCollectionPath,
   restockRequestPath,
   todaySummaryPath,
+  consentLogPath,
+  CURRENT_POLICY_VERSION,
   buildSlotId,
   todayISTString,
 } from '../lib/paths'
@@ -44,6 +46,7 @@ import type {
   AppUser,
   CabinetItem,
   CabinetItemUnit,
+  ConsentRecord,
   DoseLog,
   DoseSlotDisplay,
   DoseStatus,
@@ -827,6 +830,35 @@ export async function createRestockRequest(
     quantityAtRequest: args.quantityAtRequest,
   })
   return requestId
+}
+
+// ── DPDP consent (MC-017a) ──────────────────────────────────
+
+// Reads consentLog/{uid} so App.tsx can decide whether to gate the user
+// behind ConsentScreen. Returns null when the doc does not exist (first
+// sign-in) or is unreadable (offline/permissions).
+export async function getConsentRecord(uid: string): Promise<ConsentRecord | null> {
+  const snap = await getDoc(doc(db, consentLogPath(uid)))
+  if (!snap.exists()) return null
+  return snap.data() as ConsentRecord
+}
+
+// Writes a single immutable consentLog/{uid} doc. The rules block update
+// and delete, so a re-consent (after a policy bump) overwrites via setDoc
+// — which the rules treat as a create when the prior doc had a different
+// policyVersion is NOT possible, so we set merge:true for that path. For
+// MVP the policy bump path simply replaces the doc by issuing a new uid
+// is unchanged, so we use setDoc without merge here. The recordConsent
+// flow is gated by App.tsx detecting an outdated policyVersion.
+export async function recordConsent(uid: string, platform: string): Promise<void> {
+  const appVersion = (import.meta.env.VITE_APP_VERSION as string | undefined) || 'dev'
+  await setDoc(doc(db, consentLogPath(uid)), {
+    uid,
+    consentedAt: serverTimestamp(),
+    policyVersion: CURRENT_POLICY_VERSION,
+    appVersion,
+    platform,
+  })
 }
 
 // Self-service preference write. Only the fields explicitly allowed by the

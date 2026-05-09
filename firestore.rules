@@ -153,6 +153,22 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ─── /consentLog/{uid} ────────────────────────────────────────────────
+    // MC-017a — DPDP consent record. One immutable doc per user, written by
+    // the client when the user taps "I agree and continue" on ConsentScreen.
+    // Per the DPDP Act we treat this as evidence of informed consent and so
+    // it cannot be edited or deleted by the user — even purgeDeletedAccounts
+    // leaves it in place for compliance.
+    match /consentLog/{uid} {
+      allow read:   if isSelf(uid)
+                     || (request.auth != null && request.auth.token.role == 'admin');
+      allow create: if isSelf(uid)
+                     && request.resource.data.uid == uid
+                     && request.resource.data.policyVersion is string;
+      allow update: if false;
+      allow delete: if false;
+    }
+
     // ─── /households/{hId} ────────────────────────────────────────────────
     match /households/{hId} {
       allow read:  if isParticipant(hId);

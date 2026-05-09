@@ -15,8 +15,28 @@ export interface AppUser {
   whatsappRemindersEnabled?: boolean        // default true if absent
   reminderMethod?: 'whatsapp' | 'push' | 'both'  // admin-only; default 'both'
   fcmToken?: string                         // FCM push registration
+  fcmTokens?: string[]                      // multi-device FCM (cleared on soft-delete)
   whatsappOptOut?: boolean                  // legacy toggle
   whatsappSnoozeUntil?: Timestamp | null    // legacy snooze
+  // MC-017a — soft-delete window. When deletedAt is set, the user is in the
+  // 30-day recovery window. purgeDeletedAccounts hard-deletes once
+  // deletionScheduledFor < now.
+  deletedAt?: Timestamp | null
+  deletionScheduledFor?: Timestamp | null
+  // Captured at soft-delete time so purgeDeletedAccounts can reach into the
+  // households the user belonged to without re-deriving membership after the
+  // member docs are removed.
+  deletionHouseholds?: string[]
+}
+
+// MC-017a — DPDP consent record. One per user, written by the client on
+// first sign-in (or after a policy bump) and immutable thereafter.
+export interface ConsentRecord {
+  uid: string
+  consentedAt: Timestamp
+  policyVersion: string
+  appVersion: string
+  platform: string                          // 'web' | 'ios' | 'android'
 }
 
 export interface Household {

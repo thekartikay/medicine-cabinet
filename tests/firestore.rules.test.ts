@@ -265,6 +265,59 @@ describe('Firestore Security Rules', () => {
     })
   })
 
+  describe('consentLog/{uid} (MC-017a)', () => {
+    it('23. priya can create her own consent record', async () => {
+      await assertSucceeds(setDoc(doc(asPriya(), 'consentLog/priya'), {
+        uid: 'priya',
+        policyVersion: '2026-05-06',
+        appVersion: 'dev',
+        platform: 'web',
+      }))
+    })
+
+    it('24. priya cannot create a consent record for another uid', async () => {
+      await assertFails(setDoc(doc(asPriya(), 'consentLog/rajan'), {
+        uid: 'rajan',
+        policyVersion: '2026-05-06',
+        appVersion: 'dev',
+        platform: 'web',
+      }))
+    })
+
+    it('25. priya cannot update or delete her own consent record', async () => {
+      await seed(async db => {
+        await setDoc(doc(db, 'consentLog/priya'), {
+          uid: 'priya',
+          policyVersion: '2026-05-06',
+          appVersion: 'dev',
+          platform: 'web',
+        })
+      })
+      await assertFails(updateDoc(doc(asPriya(), 'consentLog/priya'), {
+        policyVersion: '2099-01-01',
+      }))
+      await assertFails(deleteDoc(doc(asPriya(), 'consentLog/priya')))
+    })
+
+    it('26. consentLog records survive account deletion (anonymised, not removed)', async () => {
+      // Simulate post-purge state: the user's profile, household membership,
+      // and aiLogs are gone, but the consent record remains as an immutable
+      // historical artefact. The owner can still read it.
+      await seed(async db => {
+        await setDoc(doc(db, 'consentLog/priya'), {
+          uid: 'priya',
+          policyVersion: '2026-05-06',
+          appVersion: 'dev',
+          platform: 'web',
+        })
+      })
+      await assertSucceeds(getDoc(doc(asPriya(), 'consentLog/priya')))
+      // And it still cannot be wiped, even after the rest of the user's data
+      // has been purged by the daily cron.
+      await assertFails(deleteDoc(doc(asPriya(), 'consentLog/priya')))
+    })
+  })
+
   describe('aiLogs/{uid}/queries/{id}', () => {
     beforeEach(async () => {
       await seed(async db => {

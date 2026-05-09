@@ -4411,3 +4411,227 @@
   color: var(--gray-400);
   cursor: not-allowed;
 }
+
+/* ── Consent screen (cs-) — MC-017a ──────────────────────────── */
+
+.cs-root {
+  min-height: 100svh;
+  max-width: 480px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+.cs-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #ffffff;
+  padding: 20px 20px 12px;
+  border-bottom: 0.5px solid var(--gray-200, #E2E8F0);
+}
+
+.cs-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--robin, #5DC1C8);
+  margin: 6px 0 0;
+}
+
+.cs-title {
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: var(--gray-900, #0F172A);
+  margin: 0;
+}
+
+.cs-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 20px calc(28px + env(safe-area-inset-bottom, 0px));
+}
+
+.cs-icon-wrap {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(13, 148, 136, 0.12);
+  color: var(--blueberry, #106470);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cs-lead {
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--gray-700, #334155);
+  margin: 0;
+}
+
+.cs-list {
+  margin: 0;
+  padding: 0 0 0 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--gray-700, #334155);
+}
+
+.cs-list strong {
+  color: var(--gray-900, #0F172A);
+  font-weight: 800;
+}
+
+.cs-policy-link {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  color: var(--blueberry, #106470);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cs-error {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #B91C1C;
+}
+
+.cs-agree-btn {
+  margin-top: 8px;
+  padding: 14px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--blueberry, #106470);
+  color: #ffffff;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.cs-agree-btn:hover { background: var(--brand-dark, #0d5560); }
+.cs-agree-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.cs-decline-link {
+  align-self: center;
+  background: transparent;
+  border: none;
+  padding: 6px 0;
+  color: var(--gray-500, #64748B);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cs-policy-modal {
+  max-height: 80svh;
+}
+
+.cs-policy-body {
+  width: 100%;
+  max-height: 60svh;
+  overflow-y: auto;
+  text-align: left;
+  padding: 4px 0;
+}
+
+.cs-policy-pre {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--gray-700, #334155);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Settings: Account & Privacy section (st-danger-) ────────── */
+
+.st-danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #B91C1C;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.st-danger-row:hover { color: #991B1B; }
+
+.st-danger-modal {
+  align-items: flex-start;
+}
+
+.st-danger-warn {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--gray-700, #334155);
+  text-align: left;
+}
+
+.st-danger-input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1.5px solid var(--gray-200, #E2E8F0);
+  border-radius: 12px;
+  font-family: var(--sans);
+  font-size: 15px;
+  margin-top: 8px;
+}
+
+.st-danger-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.st-danger-btn-cancel,
+.st-danger-btn-confirm {
+  flex: 1;
+  padding: 12px;
+  border-radius: 9999px;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  border: none;
+}
+
+.st-danger-btn-cancel {
+  background: transparent;
+  border: 1.5px solid var(--gray-200, #E2E8F0);
+  color: var(--gray-700, #334155);
+}
+
+.st-danger-btn-confirm {
+  background: #DC2626;
+  color: #ffffff;
+}
+
+.st-danger-btn-confirm:disabled {
+  background: #FCA5A5;
+  cursor: not-allowed;
+}

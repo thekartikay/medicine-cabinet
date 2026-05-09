@@ -5,10 +5,12 @@ import i18n from '../lib/i18n'
 import { auth } from '../lib/firebase'
 import { getUserDoc, updateUserPreferences } from '../services/firestoreService'
 import type { AppUser } from '../types'
+import { DeleteAccountSection } from './DeleteAccountSection'
 
 interface Props {
   currentUid: string
   currentUserName: string
+  onAccountDeleted: () => void
 }
 
 const LANGUAGES = [
@@ -22,7 +24,7 @@ const LANGUAGES = [
 // Lightweight settings page for members. Mirrors SettingsTab's notification
 // + language behaviours but omits household management, the family roster,
 // and the invite flow — those belong to the admin only.
-export function MemberSettings({ currentUid, currentUserName }: Props) {
+export function MemberSettings({ currentUid, currentUserName, onAccountDeleted }: Props) {
   const [appUser, setAppUser] = useState<AppUser | null>(null)
   const [loadError, setLoadError] = useState('')
   const [showLangSheet, setShowLangSheet] = useState(false)
@@ -133,6 +135,9 @@ export function MemberSettings({ currentUid, currentUserName }: Props) {
         <LogOut size={16} />
         <span>Sign out</span>
       </button>
+
+      {/* Account & Privacy (MC-017a) */}
+      <DeleteAccountSection onDeleted={onAccountDeleted} />
 
       {/* Language bottom sheet */}
       {showLangSheet && (

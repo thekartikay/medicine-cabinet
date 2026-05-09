@@ -36,6 +36,7 @@ interface Props {
   user: User
   household: { hId: string; name: string }
   role: 'admin' | 'member' | 'caregiver'
+  onAccountDeleted: () => void
 }
 
 type StockStatus = 'in-stock' | 'low-stock' | 'expired'
@@ -179,7 +180,7 @@ const READOUT_LABEL: Record<ReadoutKind, string> = {
   skipped: 'Skipped',
 }
 
-export function Dashboard({ user, household, role }: Props) {
+export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard')
   // Lazy-persist tab mounting: tabs mount on first tap and stay mounted
   // (hidden via display:none when not active). Subscriptions inside tabs
@@ -1055,6 +1056,7 @@ export function Dashboard({ user, household, role }: Props) {
               <MemberSettings
                 currentUid={user.uid}
                 currentUserName={user.displayName?.trim() || 'there'}
+                onAccountDeleted={onAccountDeleted}
               />
             ) : (
               <SettingsTab
@@ -1063,6 +1065,7 @@ export function Dashboard({ user, household, role }: Props) {
                 currentUid={user.uid}
                 currentUserName={user.displayName?.trim() || 'A family member'}
                 isAdmin={role === 'admin'}
+                onAccountDeleted={onAccountDeleted}
               />
             )}
           </div>
