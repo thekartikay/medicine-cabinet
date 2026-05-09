@@ -50,6 +50,12 @@ export const consentLogPath = (uid: string) => `consentLog/${uid}`
 // policyVersion differs from this value.
 export const CURRENT_POLICY_VERSION = '2026-05-06'
 
+// Deterministic id of a household's default cabinet — mirrors the
+// `${hId}-default` pattern that getOrCreateDefaultCabinet creates and is
+// safe to use without a Firestore round-trip when only the id is needed
+// (e.g. the cabinet-query proxy call).
+export const getDefaultCabinetId = (hId: string): string => `${hId}-default`
+
 export function buildSlotId(
   tId: string,
   rId: string,

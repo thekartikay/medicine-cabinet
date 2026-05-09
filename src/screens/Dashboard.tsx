@@ -3,11 +3,14 @@ import { signOut } from 'firebase/auth'
 import type { User } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import {
-  Home, Pill, HeartPulse, Settings as SettingsIcon, Sparkles,
+  Home, Pill, HeartPulse, Settings as SettingsIcon,
   Check, Clock, X, Minus, Bell, ChevronDown,
 } from 'lucide-react'
 import { auth, functions } from '../lib/firebase'
-import { todayISTString } from '../lib/paths'
+import { todayISTString, getDefaultCabinetId } from '../lib/paths'
+import { CABINET_QUERY_ENABLED } from '../lib/featureFlags'
+import { CabinetQueryFAB } from '../components/CabinetQueryFAB'
+import { CabinetQueryModal } from '../components/CabinetQueryModal'
 import {
   getDefaultCabinetItems,
   subscribeTreatments,
@@ -19,6 +22,7 @@ import {
   subscribeNotifications,
   subscribeTodaySummary,
   getMemberDisplayName,
+  getUserDoc,
 } from '../services/firestoreService'
 import type { TodaySummary } from '../types'
 import { NotificationsPanel } from './NotificationsPanel'
@@ -194,7 +198,12 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   // Sub-view inside the dashboard tab. 'history' renders DoseHistory in place
   // of the live dashboard panels; back button restores 'home'.
   const [dashSubview, setDashSubview] = useState<'home' | 'history'>('home')
-  const [showAiModal, setShowAiModal] = useState(false)
+  // MC-004 — Cabinet Query modal open state. Replaces the prior "AI coming
+  // soon" placeholder.
+  const [cabinetQueryOpen, setCabinetQueryOpen] = useState(false)
+  // Subscription tier drives FAB visibility (per-user). Defaults to undefined
+  // until users/{uid} loads; treat any non-'family' value as free-tier.
+  const [subscriptionTier, setSubscriptionTier] = useState<string | undefined>(undefined)
   const [stockItems, setStockItems] = useState<CabinetItem[]>([])
   const [todaysDoses, setTodaysDoses] = useState<DoseSlotDisplay[]>([])
   const [logsBySlot, setLogsBySlot] = useState<Record<string, LogState>>({})
@@ -226,6 +235,28 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   // re-renders when a name resolves so the JSX picks it up.
   const adminNameCache = useRef<Map<string, string | null>>(new Map())
   const [adminNameByUid, setAdminNameByUid] = useState<Record<string, string>>({})
+
+  // MC-004 — load the user's subscription tier once on mount. The proxy
+  // server-side rate-limits regardless, so this is purely for FAB
+  // visibility. Failures fall back to undefined → treated as non-family.
+  useEffect(() => {
+    let cancelled = false
+    getUserDoc(user.uid)
+      .then(u => { if (!cancelled) setSubscriptionTier((u as { subscriptionTier?: string } | null)?.subscriptionTier) })
+      .catch(() => { /* keep undefined; FAB stays hidden */ })
+    return () => { cancelled = true }
+  }, [user.uid])
+
+  // Three independent gates, all required:
+  //   1. role === 'admin'   — defensive; subscriptionTier is per-user, but
+  //                           members never see Cabinet Query (the admin
+  //                           pays for the household's plan).
+  //   2. tier === 'family'  — paid plan only.
+  //   3. CABINET_QUERY_ENABLED — build-time feature flag for staged rollout.
+  const showCabinetQueryFAB =
+    role === 'admin'
+    && subscriptionTier === 'family'
+    && CABINET_QUERY_ENABLED
 
   async function sendReminder(slot: DoseSlotDisplay) {
     // Optimistic — disable the button immediately. Roll back on failure.
@@ -1258,17 +1289,12 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
         </div>
       )}
 
-      {/* ── FAB ─────────────────────────────────────────────────── */}
-      {/* Members only see the FAB on the home tab; admins see it everywhere. */}
-      {(role !== 'member' || activeTab === 'dashboard') && (
-        <button
-          className="db-fab"
-          onClick={() => setShowAiModal(true)}
-          aria-label="Ask your cabinet"
-        >
-          <Sparkles size={17} />
-          <span>Ask your cabinet</span>
-        </button>
+      {/* ── Cabinet Query FAB (MC-004) ─────────────────────────── */}
+      {/* Replaces the prior "AI coming soon" placeholder. Visible only when
+          all three gates are open: admin role, family tier, and the build-
+          time feature flag. Members never see this FAB. */}
+      {showCabinetQueryFAB && (
+        <CabinetQueryFAB onClick={() => setCabinetQueryOpen(true)} />
       )}
 
       {/* ── Bottom navigation ───────────────────────────────────── */}
@@ -1286,26 +1312,17 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
         ))}
       </nav>
 
-      {/* ── AI modal ────────────────────────────────────────────── */}
-      {showAiModal && (
-        <div
-          className="db-modal-overlay"
-          onClick={() => setShowAiModal(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-label="AI feature coming soon"
-        >
-          <div className="db-modal" onClick={e => e.stopPropagation()}>
-            <span className="db-modal-icon" aria-hidden="true">✨</span>
-            <p className="db-modal-title">AI coming soon</p>
-            <p className="db-modal-sub">
-              Ask your cabinet anything about your medicines — coming in a future update.
-            </p>
-            <button className="db-modal-close" onClick={() => setShowAiModal(false)}>
-              Got it
-            </button>
-          </div>
-        </div>
+      {/* ── Cabinet Query modal (MC-004) ─────────────────────────── */}
+      {/* Mounted unconditionally so the close→reopen cycle resets cleanly via
+          its `open` prop. Same gating as the FAB protects against stale
+          state if the tier flips mid-session. */}
+      {showCabinetQueryFAB && (
+        <CabinetQueryModal
+          open={cabinetQueryOpen}
+          onClose={() => setCabinetQueryOpen(false)}
+          hId={household.hId}
+          cId={getDefaultCabinetId(household.hId)}
+        />
       )}
 
       {/* Reminder toast (Fix 5) */}
