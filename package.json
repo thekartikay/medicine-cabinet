@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:rules": "mocha tests/firestore.rules.test.ts"
+    "test:rules": "mocha tests/firestore.rules.test.ts",
+    "eval:cabinet": "tsx scripts/evalCabinetQuery.ts",
+    "setup:eval-user": "tsx scripts/seedEvalTestUser.ts"
   },
   "dependencies": {
     "firebase": "^12.12.1",
@@ -27,6 +29,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "dotenv": "^17.4.2",
     "eslint": "^10.2.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
