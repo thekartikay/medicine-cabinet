@@ -1,4 +1,10 @@
 import { initializeApp } from 'firebase/app';
+import {
+  initializeAppCheck,
+  ReCaptchaEnterpriseProvider,
+  getToken as getAppCheckToken,
+  type AppCheck,
+} from 'firebase/app-check';
 import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth';
 import {
   initializeFirestore,
@@ -22,6 +28,52 @@ const firebaseConfig = {
 };
 
 export const app = initializeApp(firebaseConfig);
+
+// ─── App Check (MC-031) ─────────────────────────────────────────────────────
+// Initialised before Auth/Firestore/Functions so the reCAPTCHA Enterprise
+// provider can attach App Check tokens to every outbound request these
+// services make. We:
+//   • Skip init when there is no `window` (SSR / build-time evaluation).
+//     reCAPTCHA Enterprise only runs in a real browser; importing it server-
+//     side would throw on document/navigator access.
+//   • Skip init when VITE_RECAPTCHA_SITE_KEY is missing. Without a key we
+//     cannot mint tokens, but we still want the dev server to boot — calling
+//     code paths that require App Check will fail loudly at request time.
+//   • Set isTokenAutoRefreshEnabled so the SDK refreshes ahead of expiry
+//     without us building a manual refresh loop.
+export const appCheck: AppCheck | null = (() => {
+  if (typeof window === 'undefined') return null;
+  const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined;
+  if (!siteKey) {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[AppCheck] VITE_RECAPTCHA_SITE_KEY is not set — skipping App Check init. ' +
+        'Callable Cloud Functions with enforceAppCheck:true will reject requests until this is configured.',
+      );
+    }
+    return null;
+  }
+  return initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(siteKey),
+    isTokenAutoRefreshEnabled: true,
+  });
+})();
+
+// Dev-only sanity check: confirm a token was actually minted, without
+// printing the token itself.
+if (import.meta.env.DEV && appCheck) {
+  getAppCheckToken(appCheck, /* forceRefresh */ false)
+    .then((result) => {
+      // eslint-disable-next-line no-console
+      console.log(`[AppCheck] Token issued, length: ${result.token.length} chars`);
+    })
+    .catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.warn('[AppCheck] Token request failed:', (err as Error)?.message ?? err);
+    });
+}
+
 export const auth = getAuth(app);
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
