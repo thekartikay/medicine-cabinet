@@ -7,6 +7,10 @@ import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { getAuth } from 'firebase-admin/auth'
 import { getMessaging } from 'firebase-admin/messaging'
 import { randomUUID } from 'node:crypto'
+import { todayISTDateString } from './util/istDate'
+
+// MC-004 — Gemini API proxy. Re-exported so deploy picks it up.
+export { geminiProxy } from './geminiProxy'
 
 initializeApp()
 setGlobalOptions({ region: 'asia-south1', maxInstances: 10 })
@@ -216,13 +220,9 @@ export const createHousehold = onCall(
 // +05:30 offset, so the comparison to `now` works regardless of the
 // container's timezone.
 
-// Returns IST today's date as YYYY-MM-DD using Swedish locale (ISO order).
-function todayISTDateString(now: Date): string {
-  return new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(now)
-}
+// todayISTDateString lives in ./util/istDate so the dose reminder cron,
+// maintainTodaySummary triggers, and the geminiProxy rate limiter all share
+// one IST formatter.
 
 // Returns IST day-of-week 0..6 (Sun..Sat) for a given absolute Date.
 function dayOfWeekIST(now: Date): number {
@@ -927,13 +927,9 @@ interface TSMember {
   auditNudgeText: string | null
 }
 
-// IST date string (YYYY-MM-DD) for an arbitrary instant.
-function toISTDateString(date: Date): string {
-  return new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(date)
-}
+// Local alias kept for readability inside the maintainTodaySummary block.
+// Points at the shared util so this file and the cron stay aligned.
+const toISTDateString = todayISTDateString
 
 function dayOfWeekForISTDateUTC(dateStr: string): number {
   // Already defined for MC-007 above, but re-deriving here so this block stays
@@ -1613,7 +1609,6 @@ export const purgeDeletedAccounts = onSchedule(
     }
   },
 )
-
 
 // Trigger D: treatment doc written → rebuild today (status / regimen scope
 // changes can move slots in or out of the day).
