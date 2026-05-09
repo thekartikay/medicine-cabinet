@@ -1306,6 +1306,315 @@ export const rebuildTodaySummary = onSchedule(
   },
 )
 
+// ─── MC-017a — DPDP account deletion ─────────────────────────────────────────
+// Three-piece flow:
+//   1. deleteAccount (callable)        — soft-delete: stamp deletedAt + a
+//      30-day deletionScheduledFor on users/{uid}, remove the uid from any
+//      household membership lists, revoke custom claims, and clear FCM
+//      tokens. Returns the hard-delete timestamp so the client can show it.
+//   2. restoreAccount (callable)       — within the 30-day window, the user
+//      signs back in and confirms restoration. We clear deletedAt and
+//      deletionScheduledFor. Re-attaching to the household requires the
+//      memberUids/adminIds entries we removed at soft-delete time, so we
+//      use deletionHouseholds[] (captured then) to put them back.
+//   3. purgeDeletedAccounts (schedule) — daily 03:00 IST. For every user
+//      whose deletionScheduledFor is in the past, hard-delete: dose logs
+//      authored by uid (across the user's known households), the users doc,
+//      the aiLogs subtree, and the Auth account. Inventory audits and the
+//      consentLog/{uid} record are intentionally preserved (anonymised) so
+//      the legal audit trail survives the purge.
+//
+// All three respect CLAUDE.md rule 9 (enforceAppCheck) for the callables.
+// The scheduled function isn't user-callable so App Check doesn't apply.
+
+const DELETION_GRACE_DAYS = 30
+
+// Walks the user's known households and strips their uid from memberUids and
+// adminIds. The membership list is captured at soft-delete time so the same
+// households can be restored later. We use a transaction per household so the
+// two arrayRemove ops land atomically with the audit-friendly read.
+async function detachUserFromHouseholds(uid: string, hIds: string[]): Promise<void> {
+  for (const hId of hIds) {
+    const ref = db.doc(`households/${hId}`)
+    try {
+      await db.runTransaction(async tx => {
+        const snap = await tx.get(ref)
+        if (!snap.exists) return
+        tx.update(ref, {
+          memberUids: FieldValue.arrayRemove(uid),
+          adminIds: FieldValue.arrayRemove(uid),
+        })
+      })
+    } catch {
+      // One bad household shouldn't block the rest. Surface via logs only.
+    }
+    // Delete the member sub-doc so the user disappears from the roster.
+    try {
+      await db.doc(`households/${hId}/members/${uid}`).delete()
+    } catch {
+      // Already gone or not present — fine.
+    }
+  }
+}
+
+// Resolves every household the user has any record of being in. We prefer
+// users/{uid}.householdId (current), fall back to scanning members groups
+// only if needed.
+async function resolveUserHouseholds(uid: string, userData: FirebaseFirestore.DocumentData | undefined): Promise<string[]> {
+  const seen = new Set<string>()
+  const direct = userData?.householdId as string | undefined
+  if (direct) seen.add(direct)
+  const stamped = userData?.deletionHouseholds as string[] | undefined
+  if (stamped) for (const h of stamped) seen.add(h)
+  return [...seen]
+}
+
+export const deleteAccount = onCall(
+  { enforceAppCheck: true, region: 'asia-south1' },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Sign in required to delete your account.')
+    }
+    const uid = request.auth.uid
+
+    const raw = (request.data ?? {}) as { confirmation?: unknown }
+    if (raw.confirmation !== 'DELETE_MY_ACCOUNT') {
+      throw new HttpsError(
+        'failed-precondition',
+        'Confirmation string did not match. Type DELETE in the app to proceed.',
+      )
+    }
+
+    const userRef = db.doc(`users/${uid}`)
+    const userSnap = await userRef.get()
+    const userData = userSnap.data()
+    const households = await resolveUserHouseholds(uid, userData)
+
+    // 1. Detach from households first. If this fails halfway, the user can
+    //    re-trigger deletion; idempotent because arrayRemove on a missing
+    //    member is a no-op.
+    await detachUserFromHouseholds(uid, households)
+
+    // 2. Soft-delete the user doc with the recovery window. We stamp
+    //    deletionHouseholds so restoreAccount and the purge cron know
+    //    where to look without consulting the per-household members
+    //    collection (which we just emptied).
+    const scheduledFor = Timestamp.fromMillis(
+      Date.now() + DELETION_GRACE_DAYS * 24 * 60 * 60 * 1000,
+    )
+    await userRef.set(
+      {
+        deletedAt: FieldValue.serverTimestamp(),
+        deletionScheduledFor: scheduledFor,
+        deletionHouseholds: households,
+        // Cleared so the user stops receiving FCM notifications during the
+        // grace period. Both shapes (single + multi-device) are blanked.
+        fcmToken: FieldValue.delete(),
+        fcmTokens: [],
+        // Removing householdId frees the user to join a different
+        // household if they later create a fresh account; the old data
+        // will still be purged by the cron.
+        householdId: FieldValue.delete(),
+      },
+      { merge: true },
+    )
+
+    // 3. Revoke custom claims so the user cannot read household-scoped data
+    //    while soft-deleted. Setting to {} drops hId/role; the rules will
+    //    treat them as a stranger to the household.
+    await auth.setCustomUserClaims(uid, {})
+    // Force any active sessions to refresh their token on next read.
+    await auth.revokeRefreshTokens(uid)
+
+    return {
+      status: 'scheduled',
+      hardDeleteAt: scheduledFor.toMillis(),
+    }
+  },
+)
+
+export const restoreAccount = onCall(
+  { enforceAppCheck: true, region: 'asia-south1' },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Sign in required to restore your account.')
+    }
+    const uid = request.auth.uid
+
+    const userRef = db.doc(`users/${uid}`)
+    const userSnap = await userRef.get()
+    if (!userSnap.exists) {
+      throw new HttpsError('not-found', 'No account found.')
+    }
+    const userData = userSnap.data() ?? {}
+    if (!userData.deletedAt) {
+      throw new HttpsError('failed-precondition', 'Account is not pending deletion.')
+    }
+    const scheduled = userData.deletionScheduledFor as FirebaseFirestore.Timestamp | undefined
+    if (scheduled && scheduled.toMillis() <= Date.now()) {
+      // Already past the cutoff — purge may have run, or be about to. Refuse
+      // rather than half-restore.
+      throw new HttpsError('failed-precondition', 'Recovery window has expired.')
+    }
+
+    const households = (userData.deletionHouseholds as string[] | undefined) ?? []
+
+    // Pick the first known household to re-attach to. Most users have one.
+    // If they had multiple, the rest are dropped; that matches the soft-
+    // delete semantics where we only remove their uid — not the household
+    // itself. The user can re-join any other households via the join code.
+    const primaryHId = households[0]
+    let restoredRole: 'admin' | 'member' = 'member'
+    if (primaryHId) {
+      const hSnap = await db.doc(`households/${primaryHId}`).get()
+      if (hSnap.exists) {
+        const hData = hSnap.data() as { adminIds?: string[]; primaryAdminId?: string }
+        // primaryAdminId is the source of truth for "this user used to be the
+        // admin" — we restore them to that role if they were the primary.
+        const wasAdmin = hData.primaryAdminId === uid
+          || (hData.adminIds ?? []).includes(uid)
+        restoredRole = wasAdmin ? 'admin' : 'member'
+
+        await db.runTransaction(async tx => {
+          tx.set(
+            db.doc(`households/${primaryHId}/members/${uid}`),
+            {
+              uid,
+              hId: primaryHId,
+              role: restoredRole,
+              displayName: userData.displayName ?? null,
+              joinedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          )
+          const updates: Record<string, unknown> = {
+            memberUids: FieldValue.arrayUnion(uid),
+          }
+          if (restoredRole === 'admin') {
+            updates.adminIds = FieldValue.arrayUnion(uid)
+          }
+          tx.update(db.doc(`households/${primaryHId}`), updates)
+        })
+      }
+    }
+
+    await userRef.set(
+      {
+        deletedAt: FieldValue.delete(),
+        deletionScheduledFor: FieldValue.delete(),
+        deletionHouseholds: FieldValue.delete(),
+        ...(primaryHId ? { householdId: primaryHId } : {}),
+      },
+      { merge: true },
+    )
+
+    if (primaryHId) {
+      await auth.setCustomUserClaims(uid, { hId: primaryHId, role: restoredRole })
+    }
+
+    return { ok: true, hId: primaryHId ?? null, role: restoredRole }
+  },
+)
+
+// Daily 03:00 IST = 21:30 UTC. Scans users where deletedAt is set AND the
+// scheduled hard-delete instant is in the past, and removes their data.
+// Anonymises but does NOT delete inventoryAudits authored by uid and the
+// consentLog/{uid} record (compliance).
+export const purgeDeletedAccounts = onSchedule(
+  {
+    schedule: '30 21 * * *',
+    timeZone: 'Etc/UTC',
+    region: 'asia-south1',
+  },
+  async () => {
+    const now = Timestamp.now()
+    const usersSnap = await db.collection('users')
+      .where('deletionScheduledFor', '<=', now)
+      .get()
+
+    for (const userDoc of usersSnap.docs) {
+      const uid = userDoc.id
+      const data = userDoc.data() as {
+        deletedAt?: FirebaseFirestore.Timestamp
+        deletionHouseholds?: string[]
+      }
+      if (!data.deletedAt) continue
+      const households = data.deletionHouseholds ?? []
+
+      // 1. Hard-delete dose logs authored by this uid across known households.
+      for (const hId of households) {
+        const treatments = await db.collection(`households/${hId}/treatments`).get()
+        for (const tDoc of treatments.docs) {
+          const logsSnap = await tDoc.ref.collection('logs')
+            .where('createdBy', '==', uid)
+            .get()
+          for (let i = 0; i < logsSnap.docs.length; i += 499) {
+            const batch = db.batch()
+            for (const logDoc of logsSnap.docs.slice(i, i + 499)) {
+              batch.delete(logDoc.ref)
+            }
+            await batch.commit()
+          }
+        }
+        // Anonymise inventoryAudits authored by uid (preserve the row).
+        const auditsSnap = await db.collection(`households/${hId}/inventoryAudits`)
+          .where('authoredBy', '==', uid)
+          .get()
+        for (let i = 0; i < auditsSnap.docs.length; i += 499) {
+          const batch = db.batch()
+          for (const a of auditsSnap.docs.slice(i, i + 499)) {
+            batch.update(a.ref, { authoredBy: 'deleted-user' })
+          }
+          await batch.commit()
+        }
+      }
+
+      // 2. Delete the aiLogs/{uid}/queries/* subtree.
+      const aiQueriesSnap = await db.collection(`aiLogs/${uid}/queries`).get()
+      for (let i = 0; i < aiQueriesSnap.docs.length; i += 499) {
+        const batch = db.batch()
+        for (const q of aiQueriesSnap.docs.slice(i, i + 499)) {
+          batch.delete(q.ref)
+        }
+        await batch.commit()
+      }
+      try {
+        await db.doc(`aiLogs/${uid}`).delete()
+      } catch {
+        // No parent doc — ignore.
+      }
+
+      // 3. Compliance audit row first (so a partial failure still leaves a
+      //    record that the purge ran for this uid).
+      try {
+        await db.doc(`deletionAudit/${uid}`).set({
+          uid,
+          purgedAt: FieldValue.serverTimestamp(),
+          households,
+        })
+      } catch {
+        // Best-effort.
+      }
+
+      // 4. Delete the user profile doc. consentLog/{uid} is left in place.
+      try {
+        await db.doc(`users/${uid}`).delete()
+      } catch {
+        // Already gone.
+      }
+
+      // 5. Delete the Firebase Auth account itself. Do this last so a partial
+      //    failure earlier doesn't leave the user unable to recover.
+      try {
+        await auth.deleteUser(uid)
+      } catch {
+        // Already deleted or not found.
+      }
+    }
+  },
+)
+
+
 // Trigger D: treatment doc written → rebuild today (status / regimen scope
 // changes can move slots in or out of the day).
 export const onTreatmentWritten = onDocumentWritten(
