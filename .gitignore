@@ -50,3 +50,6 @@ CLAUDE.md
 
 # Design / spec PDFs — large render artifacts, regenerated from source
 Documents/*.pdf
+
+# Local document scratch dir
+Documents/
