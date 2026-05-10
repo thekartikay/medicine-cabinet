@@ -11,6 +11,20 @@ export interface CabinetQueryRequest {
   query: string
 }
 
+// MC-013 — a medicine the user is about to add to the cabinet (no iId yet
+// because no Firestore doc exists). The proxy synthesises a fake
+// CabinetContextItem from these fields so the model can check whether the
+// pending addition would interact with anything already in the cabinet.
+// Optional fields are passed through when known; the model only really needs
+// brandName + activeIngredients to identify what the medicine actually is.
+export interface CandidateMedicine {
+  medicineId: string                  // masterDb id when the user picked from search
+  brandName: string                   // user-facing name, always present
+  activeIngredients?: string[]        // each entry contributes to the hallucination name index
+  dosageForm?: string                 // 'tablet' | 'syrup' | …
+  strength?: string                   // '500mg', '2.5mg/ml', …
+}
+
 export interface DrugInteractionRequest {
   queryType: 'drug_interaction'
   hId: string
@@ -19,6 +33,13 @@ export interface DrugInteractionRequest {
   // underlying medicineId via households/{hId}/cabinets/{cId}/items/{iId}
   // before consulting masterDb. Keeps the client out of masterDb lookups.
   cabinetItemIds: string[]
+  // MC-013 — optional. When present, the proxy includes a synthetic item
+  // representing this medicine in the model context, so the check answers
+  // "would adding X interact with what's already in the cabinet?" rather
+  // than just "do the existing items interact with each other?"
+  // Backward-compatible: omitting this field reproduces the original
+  // (cabinet-only) behaviour exactly.
+  candidateMedicine?: CandidateMedicine
 }
 
 export type GeminiProxyRequest = CabinetQueryRequest | DrugInteractionRequest

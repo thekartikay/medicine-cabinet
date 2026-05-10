@@ -16,6 +16,7 @@ import { FirebaseError } from 'firebase/app'
 import { functions } from '../lib/firebase'
 import type {
   CabinetQueryRequest,
+  CandidateMedicine,
   DrugInteractionRequest,
   GeminiProxyRequest,
   GeminiProxyResponse,
@@ -78,19 +79,29 @@ export async function askCabinet(
   return callProxy('askCabinet', req)
 }
 
-// Drug-interaction check across two or more cabinet items. Never rate-
-// limited (CLAUDE.md rule 6); the proxy hard-rejects responses that
-// reference medicines outside the supplied subset.
+// Drug-interaction check. Never rate-limited (CLAUDE.md rule 6); the proxy
+// hard-rejects responses that reference medicines outside the supplied
+// subset.
+//
+// Two call shapes:
+//   • Existing-cabinet check — pass at least 2 cabinetItemIds; omit
+//     candidateMedicine. Backward-compat with the AK-31 eval set.
+//   • Pending-addition check (MC-013) — pass 1+ cabinetItemIds and a
+//     candidateMedicine describing the medicine the user is about to add.
+//     The proxy synthesises a "would adding X interact with the rest?"
+//     prompt and returns the same discriminated response shape.
 export async function checkDrugInteraction(
   cabinetItemIds: string[],
   hId: string,
   cId: string,
+  candidateMedicine?: CandidateMedicine,
 ): Promise<GeminiProxyResponse> {
   const req: DrugInteractionRequest = {
     queryType: 'drug_interaction',
     hId,
     cId,
     cabinetItemIds,
+    ...(candidateMedicine ? { candidateMedicine } : {}),
   }
   return callProxy('checkDrugInteraction', req)
 }

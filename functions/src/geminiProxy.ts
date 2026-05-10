@@ -23,6 +23,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore'
 import { GoogleGenAI } from '@google/genai'
 import { todayISTDateString } from './util/istDate'
 import type {
+  CandidateMedicine,
   GeminiProxyRequest,
   GeminiProxyResponse,
   RefusalType,
@@ -152,6 +153,12 @@ interface CabinetContextItem {
   strength: string | null
   dosageForm: string | null
   isOTC?: boolean        // omitted when not present on masterDb (no guessing)
+  // MC-013 — true when this entry was synthesised from a CandidateMedicine
+  // payload (i.e. the user's pending Add-Medicine candidate, not a real
+  // Firestore doc). The prompt highlights these so the model treats them as
+  // "would adding this interact with the rest?" rather than "are these
+  // already-stocked items interacting?". Omitted on real cabinet items.
+  pendingAddition?: boolean
 }
 
 interface ResolvedCabinet {
@@ -177,6 +184,10 @@ interface AuditLogEntry {
   istDate: string
   hallucinatedMedicines?: string[]
   errorMessage?: string
+  // MC-013 — when present, distinguishes "interaction within an existing
+  // cabinet" from "interaction surfaced when adding a new medicine".
+  candidateMedicineId?: string
+  candidateBrandName?: string
 }
 
 // ── Implementation ─────────────────────────────────────────────────────────
@@ -436,34 +447,85 @@ export const geminiProxy = onCall(
     const cabinetItemIds = Array.isArray(data.cabinetItemIds)
       ? (data.cabinetItemIds as unknown[]).filter((s): s is string => typeof s === 'string')
       : []
-    if (cabinetItemIds.length < 2) {
+    // MC-013 — optional pending-addition payload. Validate shape; missing or
+    // malformed → undefined (the request behaves as the original cabinet-only
+    // check, which is the eval-set's path).
+    const rawCandidate = (data as { candidateMedicine?: unknown }).candidateMedicine
+    let candidateMedicine: CandidateMedicine | undefined = undefined
+    if (rawCandidate && typeof rawCandidate === 'object') {
+      const c = rawCandidate as Record<string, unknown>
+      const medicineId = typeof c.medicineId === 'string' ? c.medicineId : ''
+      const brandName = typeof c.brandName === 'string' ? c.brandName : ''
+      if (medicineId && brandName) {
+        const ai = Array.isArray(c.activeIngredients)
+          ? (c.activeIngredients as unknown[]).filter((s): s is string => typeof s === 'string')
+          : undefined
+        candidateMedicine = {
+          medicineId,
+          brandName,
+          activeIngredients: ai,
+          dosageForm: typeof c.dosageForm === 'string' ? c.dosageForm : undefined,
+          strength: typeof c.strength === 'string' ? c.strength : undefined,
+        }
+      }
+    }
+
+    // Effective-item budget: at least 2 items must end up in the subset for
+    // an interaction question to be meaningful. With a candidate in play, 1
+    // cabinet item + the candidate is enough; without one, we still need 2
+    // cabinet items as before (preserves eval-set behaviour).
+    const minCabinetItems = candidateMedicine ? 1 : 2
+    if (cabinetItemIds.length < minCabinetItems) {
       throw new HttpsError(
         'invalid-argument',
-        'drug_interaction requires at least two cabinetItemIds.',
+        candidateMedicine
+          ? 'drug_interaction with a candidateMedicine requires at least one cabinetItemId.'
+          : 'drug_interaction requires at least two cabinetItemIds.',
       )
     }
 
     const cabinet = await loadCabinetContext(db, hId, cId)
-    const subset = cabinet.items.filter((it) => cabinetItemIds.includes(it.cabinetItemId))
-    if (subset.length < 2) {
+    const cabinetSubset = cabinet.items.filter((it) => cabinetItemIds.includes(it.cabinetItemId))
+    if (cabinetSubset.length < minCabinetItems) {
       throw new HttpsError(
         'invalid-argument',
-        'Could not resolve at least two of the supplied cabinetItemIds.',
+        `Could not resolve at least ${minCabinetItems} of the supplied cabinetItemIds.`,
       )
     }
+    // Splice the candidate into the subset (when present) so the model sees
+    // it alongside real items. The synthetic iId carries a `candidate:`
+    // prefix so it can never collide with a real Firestore id.
+    const subset: CabinetContextItem[] = candidateMedicine
+      ? [...cabinetSubset, synthesiseCandidateItem(candidateMedicine)]
+      : cabinetSubset
     const subsetNameIndex = buildNameIndex(subset)
+    // For audit log: cabinet medicineIds first, candidate appended explicitly
+    // (its medicineId is also in the array but the dedicated candidate fields
+    // make the analytics distinction unambiguous).
     const medicineIdsForLog = subset.map((it) => it.medicineId)
     const prompt = buildInteractionPrompt(subset)
 
+    // Audit-log fields shared by every drug_interaction return path. Spread
+    // into each writeAuditLog call so the candidate metadata, if any, is
+    // captured uniformly.
+    const candidateAuditFields = candidateMedicine
+      ? {
+          candidateMedicineId: candidateMedicine.medicineId,
+          candidateBrandName: candidateMedicine.brandName,
+        }
+      : {}
+
     console.log('[geminiProxy:pre-call:context]', {
       queryType: 'drug_interaction',
-      cabinetItemsCount: subset.length,
+      cabinetItemsCount: cabinetSubset.length,
       hasInventoryContext: subset.length > 0,
+      hasCandidate: candidateMedicine !== undefined,
     })
     const layer6 = await callGeminiJSON(prompt)
     if (layer6.kind === 'error') {
       await writeAuditLog({
         queryType: 'drug_interaction',
+        ...candidateAuditFields,
         query: medicineIdsForLog,
         responseKind: 'error',
         istDate,
@@ -483,6 +545,7 @@ export const geminiProxy = onCall(
       }
       await writeAuditLog({
         queryType: 'drug_interaction',
+        ...candidateAuditFields,
         query: medicineIdsForLog,
         responseKind: 'refusal',
         refusalType: 'LOW_CONFIDENCE_REFUSAL',
@@ -508,6 +571,7 @@ export const geminiProxy = onCall(
       }
       await writeAuditLog({
         queryType: 'drug_interaction',
+        ...candidateAuditFields,
         query: medicineIdsForLog,
         responseKind: 'refusal',
         refusalType: 'EMERGENCY_REFUSAL',
@@ -526,6 +590,7 @@ export const geminiProxy = onCall(
       }
       await writeAuditLog({
         queryType: 'drug_interaction',
+        ...candidateAuditFields,
         query: medicineIdsForLog,
         responseKind: 'refusal',
         refusalType: 'DIAGNOSTIC_REFUSAL',
@@ -544,6 +609,7 @@ export const geminiProxy = onCall(
       }
       await writeAuditLog({
         queryType: 'drug_interaction',
+        ...candidateAuditFields,
         query: medicineIdsForLog,
         responseKind: 'refusal',
         refusalType: 'LOW_CONFIDENCE_REFUSAL',
@@ -567,6 +633,7 @@ export const geminiProxy = onCall(
       }
       await writeAuditLog({
         queryType: 'drug_interaction',
+        ...candidateAuditFields,
         query: medicineIdsForLog,
         responseKind: 'error',
         istDate,
@@ -588,6 +655,7 @@ export const geminiProxy = onCall(
     }
     await writeAuditLog({
       queryType: 'drug_interaction',
+      ...candidateAuditFields,
       query: medicineIdsForLog,
       responseKind: 'answer',
       confidence: parsed.confidence,
@@ -667,9 +735,45 @@ function buildNameIndex(items: CabinetContextItem[]): Set<string> {
     if (it.name) idx.add(it.name.toLowerCase())
     if (it.displayName) idx.add(it.displayName.toLowerCase())
     if (it.brandName) idx.add(it.brandName.toLowerCase())
-    if (it.activeIngredient) idx.add(it.activeIngredient.toLowerCase())
+    if (it.activeIngredient) {
+      idx.add(it.activeIngredient.toLowerCase())
+      // Multi-ingredient strings (e.g. "Paracetamol + Caffeine" from masterDb,
+      // or the joined CandidateMedicine.activeIngredients[]) — split on common
+      // separators so each ingredient is independently matchable. Catches the
+      // case where the model says "Paracetamol" against an entry whose stored
+      // string is "Paracetamol + Caffeine".
+      for (const part of it.activeIngredient.split(/\s*[+,/]\s*/)) {
+        const trimmed = part.trim().toLowerCase()
+        if (trimmed) idx.add(trimmed)
+      }
+    }
   }
   return idx
+}
+
+// MC-013 — synthesises a CabinetContextItem from a CandidateMedicine payload
+// so the model sees the pending addition alongside real cabinet items. The
+// synthetic iId is `candidate:{medicineId}` so it can't collide with a real
+// Firestore-generated id, and the `pendingAddition: true` flag is used by
+// buildInteractionPrompt to frame the request correctly.
+function synthesiseCandidateItem(c: CandidateMedicine): CabinetContextItem {
+  // Multi-ingredient compounds get joined with " + " so the rendered string
+  // matches the format masterDb already uses. buildNameIndex will then split
+  // it back out into individual ingredients for hallucination matching.
+  const activeIngredient = c.activeIngredients && c.activeIngredients.length > 0
+    ? c.activeIngredients.join(' + ')
+    : null
+  return {
+    cabinetItemId: `candidate:${c.medicineId}`,
+    medicineId: c.medicineId,
+    name: c.brandName,
+    displayName: null,
+    activeIngredient,
+    brandName: c.brandName,
+    strength: c.strength ?? null,
+    dosageForm: c.dosageForm ?? null,
+    pendingAddition: true,
+  }
 }
 
 // Returns names that don't appear in the cabinet, using a one-directional
@@ -712,11 +816,19 @@ function buildCabinetPrompt(items: CabinetContextItem[], userQuery: string): str
 
 function buildInteractionPrompt(subset: CabinetContextItem[]): string {
   const subsetJson = JSON.stringify({ items: subset }, null, 2)
+  // If any item is flagged pendingAddition:true, the request semantics shift
+  // from "do these items interact" to "would adding the pending item interact
+  // with the rest". Both phrasings are wired so the same JSON schema works
+  // for both — only the framing sentence changes.
+  const hasPending = subset.some((it) => it.pendingAddition === true)
+  const framing = hasPending
+    ? 'Cabinet items being checked for drug interactions. ONE item has pendingAddition:true — that medicine is being considered for addition to the cabinet. Check whether adding it would create a known interaction with the other (already-stocked) items, AND whether any pair of the already-stocked items themselves has a known interaction. Do NOT speculate about medicines outside this list.'
+    : 'Check whether any pair of these medicines has a known interaction. Do NOT speculate about medicines outside this list.'
   return [
     'Cabinet items being checked for drug interactions:',
     subsetJson,
     '',
-    'Check whether any pair of these medicines has a known interaction. Do NOT speculate about medicines outside this list.',
+    framing,
     '',
     'Respond ONLY with a JSON object using these exact keys:',
     '- confidence: "high" | "medium" | "low"',
