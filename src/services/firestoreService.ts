@@ -167,7 +167,7 @@ export async function searchMasterDb(queryStr: string): Promise<MasterMedicine[]
   const q = query(
     collection(db, 'masterDb'),
     where('name', '>=', queryStr),
-    where('name', '<=', queryStr + ''),
+    where('name', '<', queryStr + '\uf8ff'),
     limit(10),
   )
   const snap = await getDocs(q)
