@@ -57,6 +57,34 @@ export interface HouseholdMember {
   joinedAt: Timestamp
 }
 
+// AK-58 — A grant of read-only access to a single household member's data,
+// issued by an admin and consumed by an external caregiver via a magic link.
+// Lives at: households/{hId}/members/{mId}/caregiverGrants/{grantId}
+//
+// The raw grant secret is NEVER stored — only its bcrypt hash. If the link
+// is lost, the admin must issue a new grant.
+export interface CaregiverGrant {
+  // Document ID; also embedded in the magic link
+  grantId: string
+  // Email address or E.164 phone number the admin shared with
+  contactEmailOrPhone: string
+  // bcrypt hash of the grant secret. Verified server-side only.
+  grantSecretHash: string
+  // UID of the admin who issued the grant
+  createdBy: string
+  // When the grant was created
+  createdAt: Timestamp
+  // When the caregiver first redeemed the link. Null until accepted.
+  acceptedAt: Timestamp | null
+  // When the admin revoked the grant. Null = active.
+  revokedAt: Timestamp | null
+  // Updated on every successful caregiver Firestore read (audit)
+  lastUsedAt: Timestamp | null
+  // Member ID this grant gives visibility into. Denormalised from the parent
+  // path to keep it available on the JWT custom claim without a path parse.
+  visibleMemberId: string
+}
+
 export interface Cabinet {
   cId: string
   hId: string

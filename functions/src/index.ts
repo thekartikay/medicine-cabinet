@@ -12,6 +12,14 @@ import { todayISTDateString } from './util/istDate'
 // MC-004 — Gemini API proxy. Re-exported so deploy picks it up.
 export { geminiProxy } from './geminiProxy'
 
+// AK-58 — Caregiver grant Cloud Functions.
+export {
+  createCaregiverGrant,
+  acceptCaregiverGrant,
+  revokeCaregiverGrant,
+  listCaregiverGrants,
+} from './caregiverGrants'
+
 initializeApp()
 setGlobalOptions({ region: 'asia-south1', maxInstances: 10 })
 

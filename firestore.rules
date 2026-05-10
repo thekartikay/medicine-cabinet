@@ -8,7 +8,9 @@ rules_version = '2';
 //   • Authorization is decided from Custom Auth Claims only:
 //     `request.auth.token.hId` (the household the user belongs to) and
 //     `request.auth.token.role` ('admin' | 'member' | 'caregiver').
-//   • No `get()` calls anywhere in the rules — they double billing.
+//   • No `get()` calls anywhere in the rules — they double billing — with
+//     ONE documented exception: AK-58 caregiver reads use get() on the grant
+//     doc to enforce revocation. See isCaregiverWithValidGrant() below.
 //   • Custom claims are set by Cloud Functions on join/role change. The client
 //     must call `user.getIdToken(true)` after a claim change to refresh the
 //     token before reads succeed.
@@ -102,12 +104,27 @@ service cloud.firestore {
           && request.auth.token.role == 'member';
     }
 
-    function isCaregiver(hId) {
-      return request.auth.token.hId == hId
-          && request.auth.token.role == 'caregiver';
+    // AK-58 — Caregiver authorization with revocation enforcement.
+    //
+    // PERFORMANCE NOTE: this rule uses get(), which costs one extra Firestore
+    // read per onSnapshot session for caregivers. At closed-beta scale (~100
+    // caregivers, low session count) this is negligible. At v2.0 scale,
+    // consider stamping a `grantValid` boolean as a Custom Claim and refreshing
+    // it on grant changes (eliminates the per-read get()). Tracked decision
+    // in AK-58 Linear description.
+    function isCaregiverWithValidGrant() {
+      return request.auth != null
+          && request.auth.token.role == 'caregiver'
+          && request.auth.token.hId != null
+          && request.auth.token.memberId != null
+          && request.auth.token.grantId != null
+          && exists(/databases/$(database)/documents/households/$(request.auth.token.hId)/members/$(request.auth.token.memberId)/caregiverGrants/$(request.auth.token.grantId))
+          && get(/databases/$(database)/documents/households/$(request.auth.token.hId)/members/$(request.auth.token.memberId)/caregiverGrants/$(request.auth.token.grantId)).data.revokedAt == null;
     }
 
-    // Convenience: anyone with a household role (admin OR member, not caregiver).
+    // Convenience: anyone with a household role (admin OR member). Caregivers
+    // are NOT participants — they take the explicit isCaregiverWithValidGrant
+    // path on the specific docs they're allowed to read.
     function isParticipant(hId) {
       return isAdmin(hId) || isMember(hId);
     }
@@ -187,6 +204,16 @@ service cloud.firestore {
                                            'whatsappOptOut',
                                            'whatsappSnoozeUntil']));
         allow delete: if isAdmin(hId);
+
+        // ── /households/{hId}/members/{memberUid}/caregiverGrants/{grantId}
+        // AK-58 — admin-only read for the grant management UI. The doc
+        // contains grantSecretHash, but the only client read path is the
+        // listCaregiverGrants Cloud Function which strips it. No client
+        // writes ever — issue/revoke go through Cloud Functions.
+        match /caregiverGrants/{grantId} {
+          allow read:  if isAdmin(hId);
+          allow write: if false;
+        }
       }
 
       // ── /households/{hId}/cabinets/{cId} ───────────────────────────────
@@ -238,8 +265,11 @@ service cloud.firestore {
 
       // ── /households/{hId}/todaySummary/{date} ──────────────────────────
       // Caregiver dashboard source of truth. Cloud-Function-written only.
+      // AK-58 — caregiver read path enforces revocation via get() on the
+      // grant doc; see isCaregiverWithValidGrant().
       match /todaySummary/{date} {
-        allow read:  if isParticipant(hId) || isCaregiver(hId);
+        allow read:  if isParticipant(hId)
+                      || (isCaregiverWithValidGrant() && request.auth.token.hId == hId);
         allow write: if false;
       }
 

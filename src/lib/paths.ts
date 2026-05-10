@@ -35,6 +35,11 @@ export const treatmentsCollectionPath = (hId: string) => `households/${hId}/trea
 export const regimensCollectionPath = (hId: string, tId: string) =>
   `households/${hId}/treatments/${tId}/regimens`
 export const membersCollectionPath = (hId: string) => `households/${hId}/members`
+// AK-58 — caregiver grant sub-collection nested under each member.
+export const caregiverGrantPath = (hId: string, mId: string, grantId: string) =>
+  `households/${hId}/members/${mId}/caregiverGrants/${grantId}`
+export const caregiverGrantsCollectionPath = (hId: string, mId: string) =>
+  `households/${hId}/members/${mId}/caregiverGrants`
 export const notificationsCollectionPath = (hId: string) =>
   `households/${hId}/notifications`
 export const notificationPath = (hId: string, notifId: string) =>

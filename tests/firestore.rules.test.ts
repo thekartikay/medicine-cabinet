@@ -63,12 +63,19 @@ beforeEach(async () => {
 const claims = {
   admin:     { hId: 'h1', role: 'admin'     },
   member:    { hId: 'h1', role: 'member'    },
-  caregiver: { hId: 'h1', role: 'caregiver' },
+  // AK-58 — caregiver claims now include grantId + memberId. The rule
+  // isCaregiverWithValidGrant() requires both, plus an existing un-revoked
+  // grant doc at /households/h1/members/rajan/caregiverGrants/g1.
+  caregiver:               { hId: 'h1', role: 'caregiver', memberId: 'rajan', grantId: 'g1' },
+  caregiverWrongHousehold: { hId: 'h2', role: 'caregiver', memberId: 'rajan', grantId: 'g1' },
+  caregiverNoGrantId:      { hId: 'h1', role: 'caregiver', memberId: 'rajan' },
 } as const
 
-const asPriya     = () => testEnv.authenticatedContext('priya', claims.admin    ).firestore() as unknown as Firestore
-const asRajan     = () => testEnv.authenticatedContext('rajan', claims.member   ).firestore() as unknown as Firestore
-const asCaregiver = () => testEnv.authenticatedContext('care1', claims.caregiver).firestore() as unknown as Firestore
+const asPriya                   = () => testEnv.authenticatedContext('priya', claims.admin                  ).firestore() as unknown as Firestore
+const asRajan                   = () => testEnv.authenticatedContext('rajan', claims.member                 ).firestore() as unknown as Firestore
+const asCaregiver               = () => testEnv.authenticatedContext('care1', claims.caregiver              ).firestore() as unknown as Firestore
+const asCaregiverWrongHousehold = () => testEnv.authenticatedContext('care2', claims.caregiverWrongHousehold).firestore() as unknown as Firestore
+const asCaregiverNoGrantId      = () => testEnv.authenticatedContext('care3', claims.caregiverNoGrantId     ).firestore() as unknown as Firestore
 
 async function seed(fn: (db: Firestore) => Promise<void>) {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
@@ -206,6 +213,13 @@ describe('Firestore Security Rules', () => {
           taken: 0,
         })
         await setDoc(doc(db, 'households/h1/cabinets/c1'), { cId: 'c1', name: 'Main' })
+        // AK-58 — un-revoked grant backing the caregiver claims used by
+        // tests 15 & 16. isCaregiverWithValidGrant() reads this doc on
+        // every caregiver-side read.
+        await setDoc(doc(db, 'households/h1/members/rajan/caregiverGrants/g1'), {
+          grantId: 'g1',
+          revokedAt: null,
+        })
       })
     })
 
@@ -213,7 +227,7 @@ describe('Firestore Security Rules', () => {
       await assertSucceeds(getDoc(doc(asRajan(), 'households/h1/todaySummary/2026-05-03')))
     })
 
-    it('15. caregiver can read todaySummary', async () => {
+    it('15. caregiver with a valid grant can read todaySummary', async () => {
       await assertSucceeds(getDoc(doc(asCaregiver(), 'households/h1/todaySummary/2026-05-03')))
     })
 
@@ -335,6 +349,134 @@ describe('Firestore Security Rules', () => {
 
     it('22. priya cannot create an ai log (Cloud-Function-only)', async () => {
       await assertFails(setDoc(doc(asPriya(), 'aiLogs/priya/queries/q2'), { id: 'q2' }))
+    })
+  })
+
+  // ── AK-58 caregiver grants ─────────────────────────────────────────────────
+
+  describe('households/{hId}/members/{mId}/caregiverGrants/{grantId}', () => {
+    beforeEach(async () => {
+      await seed(async db => {
+        await setDoc(doc(db, 'households/h1/members/rajan/caregiverGrants/g1'), {
+          grantId: 'g1',
+          contactEmailOrPhone: 'care@example.com',
+          grantSecretHash: 'hash',
+          createdBy: 'priya',
+          acceptedAt: null,
+          revokedAt: null,
+          lastUsedAt: null,
+          visibleMemberId: 'rajan',
+        })
+      })
+    })
+
+    it('27. priya (admin) can read a caregiverGrant in her household', async () => {
+      await assertSucceeds(
+        getDoc(doc(asPriya(), 'households/h1/members/rajan/caregiverGrants/g1')),
+      )
+    })
+
+    it('28. admin cannot read a caregiverGrant in a different household', async () => {
+      await seed(async db => {
+        await setDoc(doc(db, 'households/h2/members/m2/caregiverGrants/g2'), {
+          grantId: 'g2',
+          revokedAt: null,
+        })
+      })
+      // priya's claim hId is h1; isAdmin(h2) is false because token.hId != h2.
+      await assertFails(
+        getDoc(doc(asPriya(), 'households/h2/members/m2/caregiverGrants/g2')),
+      )
+    })
+
+    it('29. rajan (member) cannot read a caregiverGrant', async () => {
+      await assertFails(
+        getDoc(doc(asRajan(), 'households/h1/members/rajan/caregiverGrants/g1')),
+      )
+    })
+
+    it('30. admin cannot directly write to caregiverGrants (Cloud-Function-only)', async () => {
+      await assertFails(
+        setDoc(doc(asPriya(), 'households/h1/members/rajan/caregiverGrants/g99'), {
+          grantId: 'g99',
+          revokedAt: null,
+        }),
+      )
+    })
+  })
+
+  describe('AK-58 caregiver access path', () => {
+    beforeEach(async () => {
+      await seed(async db => {
+        await setDoc(doc(db, 'households/h1/todaySummary/2026-05-03'), {
+          date: '2026-05-03',
+        })
+        await setDoc(doc(db, 'households/h1/members/rajan'), {
+          uid: 'rajan',
+          displayName: 'Rajan',
+        })
+        await setDoc(doc(db, 'households/h1/cabinets/c1/items/i1'), {
+          iId: 'i1',
+          name: 'Metformin',
+        })
+        // Default = un-revoked grant. Tests 32–34 override to exercise
+        // failure modes (other-household, revoked, missing claim).
+        await setDoc(doc(db, 'households/h1/members/rajan/caregiverGrants/g1'), {
+          grantId: 'g1',
+          revokedAt: null,
+        })
+      })
+    })
+
+    it('31. caregiver with valid grant claims can read todaySummary', async () => {
+      await assertSucceeds(
+        getDoc(doc(asCaregiver(), 'households/h1/todaySummary/2026-05-03')),
+      )
+    })
+
+    it('32. caregiver with hId claim mismatching the document path is denied', async () => {
+      // Seed a parallel valid grant in h2 so isCaregiverWithValidGrant()
+      // succeeds for the asCaregiverWrongHousehold token. The denial then
+      // comes specifically from token.hId != path hId.
+      await seed(async db => {
+        await setDoc(doc(db, 'households/h2/members/rajan/caregiverGrants/g1'), {
+          grantId: 'g1',
+          revokedAt: null,
+        })
+      })
+      await assertFails(
+        getDoc(doc(asCaregiverWrongHousehold(), 'households/h1/todaySummary/2026-05-03')),
+      )
+    })
+
+    it('33. caregiver whose grant has revokedAt set is denied (revocation enforcement)', async () => {
+      await seed(async db => {
+        await setDoc(doc(db, 'households/h1/members/rajan/caregiverGrants/g1'), {
+          grantId: 'g1',
+          revokedAt: 1,
+        })
+      })
+      await assertFails(
+        getDoc(doc(asCaregiver(), 'households/h1/todaySummary/2026-05-03')),
+      )
+    })
+
+    it('34. caregiver with role=caregiver but missing grantId claim is denied', async () => {
+      await assertFails(
+        getDoc(doc(asCaregiverNoGrantId(), 'households/h1/todaySummary/2026-05-03')),
+      )
+    })
+
+    it('35. caregiver cannot read members collection (only todaySummary)', async () => {
+      await assertFails(
+        getDoc(doc(asCaregiver(), 'households/h1/members/rajan')),
+      )
+    })
+
+    it('36. caregiver cannot read cabinet items', async () => {
+      await assertFails(
+        getDoc(doc(asCaregiver(), 'households/h1/cabinets/c1/items/i1')),
+      )
     })
   })
 
