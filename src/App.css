@@ -4929,3 +4929,432 @@
   color: var(--gray-500);
   text-align: center;
 }
+
+/* ─── AK-58 caregiver grants — admin issuance UI ─────────────── */
+
+/* Wraps each st-avatar-tile so the whole tile is a tap target without
+   modifying the existing tile styles. Pure button reset. */
+.cg-avatar-button {
+  display: contents;
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: inherit;
+}
+
+.cg-avatar-button .st-avatar-tile {
+  cursor: pointer;
+  transition: background 0.12s, transform 0.1s, box-shadow 0.12s;
+}
+.cg-avatar-button:hover .st-avatar-tile {
+  background: var(--gray-100, #F1F5F9);
+}
+.cg-avatar-button:active .st-avatar-tile {
+  transform: scale(0.98);
+}
+.cg-avatar-button:focus-visible .st-avatar-tile {
+  outline: 2px solid var(--robin);
+  outline-offset: 2px;
+}
+
+/* Back link at the top of AdminMemberView and any caregiver sub-screen. */
+.cg-back {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 8px 4px;
+  margin: 0 0 8px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--blueberry);
+  cursor: pointer;
+  align-self: flex-start;
+}
+.cg-back:hover { color: var(--robin); }
+.cg-back:focus-visible {
+  outline: 2px solid var(--robin);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Caregiver feature card — sits inside a db-card to inherit the elevation +
+   radius from the dashboard card system, then layers caregiver-specific
+   layout on top. */
+.cg-card {
+  padding: 16px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Member header row inside AdminMemberView (avatar + name + role badge). */
+.cg-member-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cg-member-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cg-member-name {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--gray-900);
+}
+.cg-member-role {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--blueberry);
+}
+
+/* Section subtitle under "Caregivers" — explanatory copy. */
+.cg-section-sub {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--gray-500);
+  margin: -4px 0 4px;
+}
+
+/* Primary share button — Robin pill, full-width on mobile, ≥64px tap target. */
+.cg-share-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 14px 16px;
+  background: var(--robin);
+  color: #ffffff;
+  border: 0;
+  border-radius: 9999px;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+.cg-share-btn:hover { background: #4DB6BD; }
+.cg-share-btn:active { transform: scale(0.98); }
+.cg-share-btn:disabled {
+  background: var(--gray-200, #E2E8F0);
+  color: var(--gray-400, #94A3B8);
+  cursor: not-allowed;
+  transform: none;
+}
+.cg-share-btn:focus-visible {
+  outline: 2px solid var(--blueberry);
+  outline-offset: 2px;
+}
+
+/* Container for the per-member grant list. Empty in Step 1; populated in
+   Step 3 by listCaregiverGrants. */
+.cg-grant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ─── Share modal — content styling on top of db-modal-overlay/db-modal ── */
+
+/* Override db-modal's center-aligned text so input rows read left-aligned. */
+.cg-modal {
+  align-items: stretch;
+  text-align: left;
+  gap: 10px;
+  position: relative;
+}
+
+.cg-modal-x {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 9999px;
+  color: var(--gray-700, #334155);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.cg-modal-x:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.cg-modal-x:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cg-modal-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gray-700, #334155);
+  margin: 4px 0 -4px;
+}
+
+.cg-modal-input {
+  width: 100%;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid var(--gray-200, #E2E8F0);
+  border-radius: 12px;
+  font-family: var(--sans);
+  font-size: 15px;
+  color: var(--gray-900);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.cg-modal-input:focus {
+  border-color: var(--robin);
+  box-shadow: 0 0 0 3px rgba(93, 193, 200, 0.18);
+}
+.cg-modal-input--error {
+  border-color: #E24B4A;
+}
+
+.cg-modal-help {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--gray-500);
+  margin: -2px 0 6px;
+}
+
+.cg-modal-error {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #E24B4A;
+  margin: -2px 0 4px;
+}
+
+.cg-modal-primary {
+  width: 100%;
+  min-height: 48px;
+  padding: 14px 16px;
+  background: var(--robin);
+  color: #ffffff;
+  border: 0;
+  border-radius: 9999px;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  margin-top: 4px;
+}
+.cg-modal-primary:hover { background: #4DB6BD; }
+.cg-modal-primary:active { transform: scale(0.98); }
+.cg-modal-primary:disabled {
+  background: var(--gray-200, #E2E8F0);
+  color: var(--gray-400, #94A3B8);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.cg-modal-secondary {
+  width: 100%;
+  min-height: 48px;
+  padding: 14px 16px;
+  background: #ffffff;
+  color: var(--robin);
+  border: 1.5px solid var(--robin);
+  border-radius: 9999px;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+.cg-modal-secondary:hover { background: rgba(93, 193, 200, 0.08); }
+.cg-modal-secondary:active { transform: scale(0.98); }
+.cg-modal-secondary:disabled {
+  border-color: var(--gray-200, #E2E8F0);
+  color: var(--gray-400, #94A3B8);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.cg-modal-cancel {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 12px;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gray-500);
+  cursor: pointer;
+  margin-top: 2px;
+}
+.cg-modal-cancel:hover { color: var(--gray-900); }
+
+.cg-modal-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 0;
+}
+
+.cg-modal-link-field {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--gray-50, #F8FAFC);
+  border: 1px solid var(--gray-200, #E2E8F0);
+  border-radius: 12px;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--gray-700, #334155);
+  word-break: break-all;
+  user-select: all;
+}
+.cg-modal-link-field:focus {
+  outline: none;
+  border-color: var(--robin);
+  box-shadow: 0 0 0 3px rgba(93, 193, 200, 0.18);
+}
+
+/* ─── Grant list (per-member roster of issued caregiver links) ────── */
+
+.cg-grant-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+.cg-grant-empty {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--gray-500);
+  background: var(--gray-50, #F8FAFC);
+  border: 1px dashed var(--gray-200, #E2E8F0);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 4px 0 0;
+}
+
+.cg-grant {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid var(--gray-200, #E2E8F0);
+  border-radius: 14px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.cg-grant--active {
+  border-color: rgba(34, 197, 94, 0.35);
+}
+.cg-grant--awaiting {
+  border-color: rgba(245, 158, 11, 0.35);
+}
+.cg-grant--revoked {
+  border-color: var(--gray-200, #E2E8F0);
+  background: var(--gray-50, #F8FAFC);
+}
+
+.cg-grant-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cg-grant-contact {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gray-900);
+  word-break: break-word;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cg-grant--revoked .cg-grant-contact {
+  color: var(--gray-400, #94A3B8);
+  text-decoration: line-through;
+}
+
+.cg-grant-status {
+  display: inline-block;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-radius: 9999px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+.cg-grant-status--active {
+  color: #166534;
+  background: rgba(34, 197, 94, 0.12);
+}
+.cg-grant-status--awaiting {
+  color: #92400E;
+  background: rgba(245, 158, 11, 0.14);
+}
+.cg-grant-status--revoked {
+  color: var(--gray-500);
+  background: var(--gray-100, #F1F5F9);
+}
+
+.cg-grant-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.cg-grant-revoke-btn {
+  align-self: flex-start;
+  appearance: none;
+  background: #ffffff;
+  color: #E24B4A;
+  border: 1.5px solid #E24B4A;
+  border-radius: 9999px;
+  padding: 8px 16px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  margin-top: 4px;
+}
+.cg-grant-revoke-btn:hover { background: rgba(226, 75, 74, 0.08); }
+.cg-grant-revoke-btn:active { transform: scale(0.98); }
+.cg-grant-revoke-btn:disabled {
+  border-color: var(--gray-200, #E2E8F0);
+  color: var(--gray-400, #94A3B8);
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Confirmation sub-modal's primary destructive button — solid red. */
+.cg-grant-revoke-btn--confirm {
+  align-self: stretch;
+  width: 100%;
+  background: #E24B4A;
+  color: #ffffff;
+  border-color: #E24B4A;
+  min-height: 48px;
+  padding: 14px 16px;
+  font-size: 15px;
+}
+.cg-grant-revoke-btn--confirm:hover { background: #C73A39; }
+

@@ -12,6 +12,7 @@ import {
 import type { AppUser, HouseholdMember } from '../types'
 import { InviteMember, computeJoinCode } from './InviteMember'
 import { DeleteAccountSection } from './DeleteAccountSection'
+import { AdminMemberView } from './AdminMemberView'
 
 interface Props {
   hId: string
@@ -37,7 +38,8 @@ const LANGUAGES = [
 ] as const
 
 export function SettingsTab({ hId, householdName, currentUid, currentUserName, isAdmin, onAccountDeleted }: Props) {
-  const [view, setView]                 = useState<'list' | 'invite'>('list')
+  const [view, setView]                 = useState<'list' | 'invite' | 'member'>('list')
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
   const [members, setMembers]           = useState<HouseholdMember[] | null>(null)
   const [appUser, setAppUser]           = useState<AppUser | null>(null)
   const [loadError, setLoadError]       = useState('')
@@ -121,6 +123,23 @@ export function SettingsTab({ hId, householdName, currentUid, currentUserName, i
     )
   }
 
+  if (view === 'member' && selectedMemberId) {
+    const selectedMember = members?.find(m => m.uid === selectedMemberId) ?? null
+    if (selectedMember) {
+      return (
+        <AdminMemberView
+          member={selectedMember}
+          hId={hId}
+          householdName={householdName}
+          currentUserName={currentUserName}
+          onBack={() => { setView('list'); setSelectedMemberId(null) }}
+        />
+      )
+    }
+    // Member roster hasn't loaded yet (or member was removed). Fall through
+    // to the list, which will trigger its own load on render.
+  }
+
   const langLabel = LANGUAGES.find(l => l.code === lang)?.label ?? 'English'
   const joinCode  = computeJoinCode(hId)
 
@@ -142,11 +161,19 @@ export function SettingsTab({ hId, householdName, currentUid, currentUserName, i
                 const name = m.displayName?.trim() || (m.uid === currentUid ? 'You' : 'Member')
                 const initial = (m.displayName ?? name).charAt(0).toUpperCase()
                 return (
-                  <div key={m.uid} className="st-avatar-tile">
-                    <span className="st-avatar-circle" aria-hidden="true">{initial}</span>
-                    <span className="st-avatar-name">{name}</span>
-                    <span className="st-avatar-role">{ROLE_LABEL[m.role]}</span>
-                  </div>
+                  <button
+                    key={m.uid}
+                    type="button"
+                    className="cg-avatar-button"
+                    onClick={() => { setSelectedMemberId(m.uid); setView('member') }}
+                    aria-label={`Manage caregivers for ${name}`}
+                  >
+                    <span className="st-avatar-tile">
+                      <span className="st-avatar-circle" aria-hidden="true">{initial}</span>
+                      <span className="st-avatar-name">{name}</span>
+                      <span className="st-avatar-role">{ROLE_LABEL[m.role]}</span>
+                    </span>
+                  </button>
                 )
               })}
             </div>
