@@ -1,4 +1,5 @@
 import {
+  addDoc,
   collection,
   doc,
   getDoc,
@@ -37,7 +38,7 @@ import {
   restockRequestsCollectionPath,
   restockRequestPath,
   todaySummaryPath,
-  consentLogPath,
+  consentVersionPath,
   CURRENT_POLICY_VERSION,
   buildSlotId,
   todayISTString,
@@ -834,25 +835,29 @@ export async function createRestockRequest(
 
 // ── DPDP consent (MC-017a) ──────────────────────────────────
 
-// Reads consentLog/{uid} so App.tsx can decide whether to gate the user
-// behind ConsentScreen. Returns null when the doc does not exist (first
-// sign-in) or is unreadable (offline/permissions).
+// Returns the most recent consent doc from consentLog/{uid}/versions so
+// App.tsx can decide whether to gate the user behind ConsentScreen.
+// Null when the user has never consented (first sign-in) or the
+// subcollection is unreadable (offline/permissions).
 export async function getConsentRecord(uid: string): Promise<ConsentRecord | null> {
-  const snap = await getDoc(doc(db, consentLogPath(uid)))
-  if (!snap.exists()) return null
-  return snap.data() as ConsentRecord
+  const q = query(
+    collection(db, consentVersionPath(uid)),
+    orderBy('consentedAt', 'desc'),
+    limit(1),
+  )
+  const snap = await getDocs(q)
+  if (snap.empty) return null
+  return snap.docs[0].data() as ConsentRecord
 }
 
-// Writes a single immutable consentLog/{uid} doc. The rules block update
-// and delete, so a re-consent (after a policy bump) overwrites via setDoc
-// — which the rules treat as a create when the prior doc had a different
-// policyVersion is NOT possible, so we set merge:true for that path. For
-// MVP the policy bump path simply replaces the doc by issuing a new uid
-// is unchanged, so we use setDoc without merge here. The recordConsent
-// flow is gated by App.tsx detecting an outdated policyVersion.
+// Append-only consent write. Each tap of "I agree" produces a new doc
+// under consentLog/{uid}/versions with an auto-generated id; rules block
+// update/delete so prior consents stay intact as the DPDP audit trail.
+// A policy bump simply lands as a newer version doc; getConsentRecord
+// returns the latest by consentedAt desc.
 export async function recordConsent(uid: string, platform: string): Promise<void> {
   const appVersion = (import.meta.env.VITE_APP_VERSION as string | undefined) || 'dev'
-  await setDoc(doc(db, consentLogPath(uid)), {
+  await addDoc(collection(db, consentVersionPath(uid)), {
     uid,
     consentedAt: serverTimestamp(),
     policyVersion: CURRENT_POLICY_VERSION,

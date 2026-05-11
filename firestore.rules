@@ -184,6 +184,20 @@ service cloud.firestore {
                      && request.resource.data.policyVersion is string;
       allow update: if false;
       allow delete: if false;
+
+      // MC-017 fix — versioned consent subcollection (append-only). Each
+      // "I agree" tap writes a new doc with an auto-generated id; update
+      // and delete are blocked so the audit trail remains immutable.
+      // Reads mirror the parent doc's rule (self or admin) so App.tsx
+      // can query the latest version on sign-in.
+      match /versions/{version} {
+        allow read:   if isSelf(uid)
+                       || (request.auth != null && request.auth.token.role == 'admin');
+        allow create: if isSelf(uid)
+                       && request.resource.data.uid == uid;
+        allow update: if false;
+        allow delete: if false;
+      }
     }
 
     // ─── /households/{hId} ────────────────────────────────────────────────

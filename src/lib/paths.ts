@@ -49,6 +49,10 @@ export const restockRequestsCollectionPath = (hId: string) =>
 export const restockRequestPath = (hId: string, requestId: string) =>
   `households/${hId}/restockRequests/${requestId}`
 export const consentLogPath = (uid: string) => `consentLog/${uid}`
+// MC-017a — versioned consent subcollection. Append-only: each consent
+// (initial + every policy-bump re-consent) writes a new doc; rules block
+// update/delete so the audit trail is immutable.
+export const consentVersionPath = (uid: string) => `consentLog/${uid}/versions`
 
 // Bump this string whenever the privacy policy text in public/privacy-policy.md
 // changes — App.tsx forces re-consent on next sign-in for any user whose stored
