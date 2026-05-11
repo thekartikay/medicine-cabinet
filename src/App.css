@@ -5358,3 +5358,231 @@
 }
 .cg-grant-revoke-btn--confirm:hover { background: #C73A39; }
 
+/* ─── AK-58 sub-task 3: caregiver consumer dashboard (cc-) ──────── */
+
+.cc-root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--gray-50, #F8FAFC);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  padding-top: max(24px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+  font-family: var(--sans);
+}
+
+.cc-card {
+  width: 100%;
+  max-width: 420px;
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+}
+
+.cc-card--error {
+  background: #FFF1F1;
+  border: 1px solid #FCA5A5;
+}
+
+.cc-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--gray-900, #0F172A);
+  margin: 0;
+}
+
+.cc-help {
+  font-size: 14px;
+  color: var(--gray-600, #475569);
+  margin: 0;
+}
+
+.cc-error-msg {
+  font-size: 14px;
+  color: #991B1B;
+  margin: 0;
+}
+
+.cc-spinner {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 4px solid rgba(93, 193, 200, 0.2);
+  border-top-color: var(--blueberry, #5DC1C8);
+  animation: cc-spin 0.9s linear infinite;
+}
+
+@keyframes cc-spin {
+  to { transform: rotate(360deg); }
+}
+
+.cc-checkmark {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #16A34A;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.cc-error-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #DC2626;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.cc-back-btn {
+  min-height: 44px;
+  padding: 12px 20px;
+  background: transparent;
+  color: var(--gray-700, #334155);
+  border: 1px solid var(--gray-300, #CBD5E1);
+  border-radius: 9999px;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.cc-back-btn:hover { background: var(--gray-100, #F1F5F9); }
+.cc-back-btn:active { transform: scale(0.98); }
+
+/* ─── Caregiver dashboard — read-only, full-screen, mobile-first ── */
+
+.cc-dashboard-root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--gray-50, #F8FAFC);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 16px max(24px, env(safe-area-inset-bottom, 0px));
+  padding-top: max(16px, env(safe-area-inset-top, 0px));
+  font-family: var(--sans);
+  box-sizing: border-box;
+}
+
+.cc-dashboard-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 4px 16px;
+  border-bottom: 1px solid var(--gray-200, #E2E8F0);
+}
+
+.cc-dashboard-member-name {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--gray-900, #0F172A);
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.cc-dashboard-date {
+  font-size: 13px;
+  color: var(--gray-500, #64748B);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cc-slot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 0 auto;
+}
+
+.cc-slot-card {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.cc-slot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cc-slot-time {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--gray-900, #0F172A);
+}
+
+.cc-slot-medicine {
+  font-size: 15px;
+  color: var(--gray-700, #334155);
+  margin: 0;
+  overflow-wrap: break-word;
+}
+
+.cc-slot-logged {
+  font-size: 13px;
+  color: var(--gray-500, #64748B);
+  margin: 0;
+}
+
+.cc-slot-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.cc-slot-badge--taken   { background: #DCFCE7; color: #166534; }
+.cc-slot-badge--missed  { background: #FEE2E2; color: #991B1B; }
+.cc-slot-badge--skipped { background: var(--gray-200, #E2E8F0); color: var(--gray-700, #334155); }
+.cc-slot-badge--late    { background: #FEF3C7; color: #92400E; }
+.cc-slot-badge--pending { background: #DBEAFE; color: #1E40AF; }
+
+.cc-empty {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--gray-500, #64748B);
+  font-size: 14px;
+}
+
+.cc-last-updated {
+  text-align: center;
+  font-size: 12px;
+  color: var(--gray-400, #94A3B8);
+  padding: 8px 0 4px;
+}
+
