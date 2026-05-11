@@ -32,7 +32,7 @@
 import { config as loadDotenv } from 'dotenv'
 import { initializeApp, getApps, applicationDefault, type App } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
-import { getFirestore, FieldValue, type Firestore } from 'firebase-admin/firestore'
+import { getFirestore, FieldValue } from 'firebase-admin/firestore'
 
 // ── 0. dotenv ─────────────────────────────────────────────────────────────
 loadDotenv({ path: '.env.local' })

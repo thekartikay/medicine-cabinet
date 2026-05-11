@@ -142,13 +142,6 @@ function formatTimeFriendly(hhmm: string): string {
   return `${h12}:${String(m).padStart(2, '0')} ${period}`
 }
 
-// Current IST time as "HH:MM" — used to decide whether an unlogged dose has
-// crossed its scheduled time and should display as "Missed" instead of "Pending".
-function nowHHMM(): string {
-  const { h, m } = nowISTHM()
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-}
-
 // Positive when the slot's scheduled time is in the past (mins ago); negative
 // for future slots. Used both to drive the missed/pending classification and
 // to gate the "Send Reminder" button (>30 min past per spec).
