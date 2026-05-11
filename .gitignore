@@ -53,3 +53,5 @@ Documents/*.pdf
 
 # Local document scratch dir
 Documents/
+scripts/inspectEvalUser.ts
+scripts/listEmulatorUsers.ts
