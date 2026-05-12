@@ -20,6 +20,12 @@ export {
   listCaregiverGrants,
 } from './caregiverGrants'
 
+// AK-104 — Email-first identity / cross-device account linking.
+export { linkProviderToExistingAccount } from './auth/linkProvider'
+
+// One-off admin utility — delete users/{uid} docs whose Auth user is gone.
+export { cleanupOrphanedUsers } from './admin/cleanupOrphanedUsers'
+
 initializeApp()
 setGlobalOptions({ region: 'asia-south1', maxInstances: 10 })
 
@@ -83,13 +89,33 @@ export const joinHousehold = onCall(
     }
 
     // 1. Reject if the caller already belongs to a household.
+    //
+    // The claim is verified against the actual membership doc rather than
+    // trusted blindly. A claim can outlive its household when a user's
+    // Firestore data is removed out-of-band (manual console cleanup, a
+    // failed half-committed cleanup, etc.) while their Auth record still
+    // carries hId/role. Without this verification the user gets stuck —
+    // they cannot join any household because the stale claim refuses,
+    // and they have no UI path to clear claims themselves.
     const userRecord = await auth.getUser(uid)
     const existingClaims = userRecord.customClaims ?? {}
     if (existingClaims.hId) {
-      throw new HttpsError(
-        'already-exists',
-        'You already belong to a household. Leave it before joining another.',
-      )
+      const claimedHId = existingClaims.hId as string
+      const memberDoc = await db
+        .doc(`households/${claimedHId}/members/${uid}`)
+        .get()
+      if (memberDoc.exists) {
+        throw new HttpsError(
+          'already-exists',
+          'You already belong to a household. Leave it before joining another.',
+        )
+      }
+      // Stale claim — strip hId/role and continue. The final
+      // setCustomUserClaims below will re-stamp the new household's claims
+      // on top of this cleaned baseline.
+      delete (existingClaims as Record<string, unknown>).hId
+      delete (existingClaims as Record<string, unknown>).role
+      await auth.setCustomUserClaims(uid, existingClaims)
     }
 
     // 2. Find the household whose hId hashes to this code.

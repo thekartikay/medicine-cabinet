@@ -68,16 +68,32 @@ import type {
 export async function createUserIfNew(user: FirebaseUser): Promise<void> {
   const ref = doc(db, userPath(user.uid))
   const snap = await getDoc(ref)
-  if (snap.exists()) return
+  const existing = snap.data()
+  // A doc with createdAt is fully provisioned — leave it alone.
+  if (snap.exists() && existing?.createdAt) return
 
-  await setDoc(ref, {
-    uid: user.uid,
-    displayName: user.displayName,
-    email: user.email ?? null,
-    phoneNumber: user.phoneNumber ?? null,
-    photoURL: user.photoURL ?? null,
-    createdAt: serverTimestamp(),
-  })
+  // The doc may be missing entirely, or it may be a partial doc consisting
+  // of only { email } pre-stamped server-side by linkProviderToExistingAccount
+  // (AK-104) before this user's first sign-in. Fill in the rest with merge
+  // so we don't clobber that pre-stamped email.
+  //
+  // AK-104 (D1) — email is intentionally NOT copied from firebaseUser.email
+  // here. The users/{uid}.email field is the "MediCab has confirmed this
+  // email" signal that gates the EmailLinkPrompt prompt; auto-copying from
+  // the Auth record defeats that gate when a phone-OTP sign-in resolves to
+  // a canonical UID that already has email/phone linked on Firebase Auth.
+  await setDoc(
+    ref,
+    {
+      uid: user.uid,
+      displayName: user.displayName,
+      email: existing?.email ?? null,
+      phoneNumber: user.phoneNumber ?? null,
+      photoURL: user.photoURL ?? null,
+      createdAt: serverTimestamp(),
+    },
+    { merge: true },
+  )
 }
 
 export async function getUserDoc(uid: string): Promise<AppUser | null> {

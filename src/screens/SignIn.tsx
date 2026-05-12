@@ -2,10 +2,26 @@ import { useEffect, useRef, useState } from 'react'
 import {
   signInWithPopup,
   signInWithPhoneNumber,
+  signInWithCustomToken,
   RecaptchaVerifier,
   type ConfirmationResult,
 } from 'firebase/auth'
-import { auth, googleProvider } from '../lib/firebase'
+import { httpsCallable } from 'firebase/functions'
+import { auth, functions, googleProvider, refreshClaimsAndWait } from '../lib/firebase'
+
+// AK-104 — Google sign-in auto-links by email. After the popup succeeds we
+// silently call linkProviderToExistingAccount; if the email already belongs
+// to another UID with hId claims, the function merges this Google sign-in
+// into the canonical user and returns a custom token we can swap to.
+const linkProviderFn = httpsCallable<
+  { email: string; newProviderUid: string; newProvider: 'phone' | 'google.com' },
+  {
+    canonicalUid: string
+    customToken: string
+    claimsUpdated: boolean
+    action: 'linked' | 'no_op' | 'conflict_requires_owner_proof'
+  }
+>(functions, 'linkProviderToExistingAccount')
 
 type View = 'options' | 'phone-input' | 'otp-input'
 type Tab = 'login' | 'signup'
@@ -35,7 +51,32 @@ export function SignIn() {
     clearError()
     setLoading(true)
     try {
-      await signInWithPopup(auth, googleProvider)
+      const userCred = await signInWithPopup(auth, googleProvider)
+      const newUid = userCred.user.uid
+      const email = userCred.user.email
+      // AK-104: silently link this Google sign-in to any existing account on
+      // the same email. Failure here doesn't block sign-in — the user keeps
+      // their fresh Google session and the next phone-sign-in or admin
+      // intervention can reconcile.
+      if (email) {
+        try {
+          const result = await linkProviderFn({
+            email,
+            newProviderUid: newUid,
+            newProvider: 'google.com',
+          })
+          if (result.data.action === 'linked' && result.data.customToken) {
+            await signInWithCustomToken(auth, result.data.customToken)
+            await refreshClaimsAndWait(auth.currentUser, 'hId')
+          }
+          // no_op → caller is brand new; nothing to do.
+          // conflict_requires_owner_proof → not reachable for Google in
+          //   practice (Google always carries email), so we don't branch here.
+        } catch (linkErr) {
+          // eslint-disable-next-line no-console
+          console.warn('linkProviderToExistingAccount failed (Google):', linkErr)
+        }
+      }
       // onAuthStateChanged in App.tsx drives the transition to Welcome
     } catch (err) {
       setError(parseAuthError(err))

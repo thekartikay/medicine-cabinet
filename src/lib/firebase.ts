@@ -5,7 +5,7 @@ import {
   getToken as getAppCheckToken,
   type AppCheck,
 } from 'firebase/app-check';
-import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, connectAuthEmulator, type User } from 'firebase/auth';
 import {
   initializeFirestore,
   persistentLocalCache,
@@ -86,6 +86,35 @@ if (import.meta.env.DEV) {
   connectAuthEmulator(auth, 'http://localhost:9099');
   connectFirestoreEmulator(db, 'localhost', 8080);
   connectFunctionsEmulator(functions, 'localhost', 5001);
+}
+
+// AK-104 — Force-refresh the ID token until an expected custom claim shows
+// up. Production setCustomUserClaims propagation is asynchronous (Firebase
+// Auth's identity service has a brief delay between Admin SDK write and the
+// next minted ID token); the emulator does not have this lag, so tests pass
+// without retries while dev sign-ins fail with permission-denied on the
+// first Firestore read. Caller should await this BEFORE any household-scoped
+// read after a Cloud Function set new claims.
+export async function refreshClaimsAndWait(
+  user: User | null,
+  expectedClaim: string,
+  maxAttempts = 3,
+  delayMs = 500,
+): Promise<void> {
+  if (!user) return
+  for (let i = 0; i < maxAttempts; i++) {
+    const tokenResult = await user.getIdTokenResult(true)
+    if (tokenResult.claims[expectedClaim] != null) return
+    if (i < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
+  // Don't throw — the next Firestore read will surface the missing-claim
+  // error in context. Logging keeps the failure mode visible.
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[refreshClaimsAndWait] claim "${expectedClaim}" not present after ${maxAttempts} refresh attempts`,
+  )
 }
 
 // getMessaging throws in environments that don't support the Push API (e.g. iOS webview without entitlement)
