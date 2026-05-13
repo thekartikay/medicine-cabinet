@@ -8,15 +8,29 @@ import {
 import { auth, googleProvider } from '../lib/firebase'
 
 type View = 'options' | 'phone-input' | 'otp-input'
-type Tab = 'login' | 'signup'
+
+// AK-112 — OTP polish constants. Kept inline so the values are visible at the
+// call sites that reference them (resend useEffect, lockout reset effect, etc.).
+const RESEND_SECONDS = 60
+const LOCKOUT_SECONDS = 5 * 60
+const MAX_OTP_ATTEMPTS = 3
 
 export function SignIn() {
   const [view, setView] = useState<View>('options')
-  const [tab, setTab] = useState<Tab>('login')
   const [phone, setPhone] = useState('+91 ')
   const [otp, setOtp] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // AK-112 — resend timer, help-toggle, attempt counter, and lockout.
+  // State is in-memory only. A page refresh resets the lockout because
+  // CLAUDE.md rule #1 forbids localStorage; Firebase Auth's own
+  // auth/too-many-requests still gates the server, so client-side lockout
+  // is a UX nudge rather than a security boundary.
+  const [resendCountdown, setResendCountdown] = useState(0)
+  const [showHelp, setShowHelp] = useState(false)
+  const [failedAttempts, setFailedAttempts] = useState(0)
+  const [lockoutCountdown, setLockoutCountdown] = useState(0)
 
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null)
   const confirmationRef = useRef<ConfirmationResult | null>(null)
@@ -26,6 +40,33 @@ export function SignIn() {
       recaptchaRef.current?.clear()
     }
   }, [])
+
+  // Resend-timer tick. Decrements once per second while > 0.
+  useEffect(() => {
+    if (resendCountdown <= 0) return
+    const id = setTimeout(() => setResendCountdown(c => c - 1), 1000)
+    return () => clearTimeout(id)
+  }, [resendCountdown])
+
+  // Lockout-timer tick. Mirrors the resend tick but is independent so the two
+  // countdowns can run simultaneously (we still show the resend timer while
+  // the lockout banner is up).
+  useEffect(() => {
+    if (lockoutCountdown <= 0) return
+    const id = setTimeout(() => setLockoutCountdown(c => Math.max(0, c - 1)), 1000)
+    return () => clearTimeout(id)
+  }, [lockoutCountdown])
+
+  // When the lockout clears, reset the attempt counter so the user starts
+  // fresh on their next try.
+  useEffect(() => {
+    if (lockoutCountdown === 0 && failedAttempts >= MAX_OTP_ATTEMPTS) {
+      setFailedAttempts(0)
+    }
+  }, [lockoutCountdown, failedAttempts])
+
+  const canResend = resendCountdown === 0
+  const isLockedOut = lockoutCountdown > 0
 
   function clearError() {
     setError('')
@@ -45,10 +86,16 @@ export function SignIn() {
   }
 
   async function handleSendOtp() {
+    if (isLockedOut) return
     clearError()
     setLoading(true)
     try {
       const normalizedPhone = phone.replace(/\s/g, '')
+      // Always use a real RecaptchaVerifier. In DEV the
+      // auth.settings.appVerificationDisabledForTesting flag set in
+      // firebase.ts bypasses the verify() call and the reCAPTCHA Enterprise
+      // enforcement-config fetch, so the emulator works. In production the
+      // real verification runs.
       if (!recaptchaRef.current) {
         recaptchaRef.current = new RecaptchaVerifier(auth, 'recaptcha-container', {
           size: 'invisible',
@@ -60,6 +107,13 @@ export function SignIn() {
         recaptchaRef.current,
       )
       setView('otp-input')
+      setOtp('')
+      setShowHelp(false)
+      setResendCountdown(RESEND_SECONDS)
+      // Fresh send → fresh attempts counter. The lockout effect already
+      // resets attempts when its countdown expires, so this is mostly a
+      // safety net for the back-to-phone-input → resend path.
+      setFailedAttempts(0)
     } catch (err) {
       recaptchaRef.current?.clear()
       recaptchaRef.current = null
@@ -69,15 +123,40 @@ export function SignIn() {
     }
   }
 
+  async function handleResendOtp() {
+    if (!canResend || isLockedOut || loading) return
+    // Each RecaptchaVerifier is bound to one signInWithPhoneNumber call.
+    // Force a fresh one before re-sending.
+    recaptchaRef.current?.clear()
+    recaptchaRef.current = null
+    await handleSendOtp()
+  }
+
   async function handleVerifyOtp() {
-    if (!confirmationRef.current) return
+    if (!confirmationRef.current || isLockedOut) return
     clearError()
     setLoading(true)
     try {
       await confirmationRef.current.confirm(otp)
       // onAuthStateChanged fires; App.tsx transitions to Welcome
     } catch (err) {
-      setError(parseAuthError(err))
+      const code = (err as { code?: string })?.code
+      if (code === 'auth/invalid-verification-code') {
+        const nextAttempts = failedAttempts + 1
+        setFailedAttempts(nextAttempts)
+        setOtp('')
+        if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+          setLockoutCountdown(LOCKOUT_SECONDS)
+          setError('')
+        } else {
+          const remaining = MAX_OTP_ATTEMPTS - nextAttempts
+          setError(
+            `Wrong code. ${remaining} attempt${remaining === 1 ? '' : 's'} left.`,
+          )
+        }
+      } else {
+        setError(parseAuthError(err))
+      }
     } finally {
       setLoading(false)
     }
@@ -100,24 +179,7 @@ export function SignIn() {
 
         {view === 'options' && (
           <>
-            <div className="si-tabs" role="tablist">
-              <button
-                role="tab"
-                aria-selected={tab === 'login'}
-                className={`si-tab${tab === 'login' ? ' si-tab--active' : ''}`}
-                onClick={() => setTab('login')}
-              >
-                LOGIN
-              </button>
-              <button
-                role="tab"
-                aria-selected={tab === 'signup'}
-                className={`si-tab${tab === 'signup' ? ' si-tab--active' : ''}`}
-                onClick={() => setTab('signup')}
-              >
-                SIGN UP
-              </button>
-            </div>
+            <h2 className="si-panel-title">Sign in to MediCab</h2>
 
             <button
               className="si-pill-btn"
@@ -139,7 +201,7 @@ export function SignIn() {
               <span className="si-pill-icon-wrap si-pill-icon--phone">
                 <PhoneIcon />
               </span>
-              <span className="si-pill-label">Continue with Phone</span>
+              <span className="si-pill-label">Continue with phone</span>
               <span className="si-pill-chevron" aria-hidden="true">›</span>
             </button>
           </>
@@ -147,7 +209,7 @@ export function SignIn() {
 
         {view === 'phone-input' && (
           <>
-            <h2 className="si-panel-title">Enter your number</h2>
+            <h2 className="si-panel-title">Enter your phone number</h2>
             <label className="si-label" htmlFor="phone-input">Mobile number</label>
             <input
               id="phone-input"
@@ -163,7 +225,7 @@ export function SignIn() {
               onClick={handleSendOtp}
               disabled={loading || phone.replace(/\D/g, '').length < 10}
             >
-              {loading ? 'Sending…' : 'Send OTP'}
+              {loading ? 'Sending…' : 'Send code'}
             </button>
             <button
               className="si-back"
@@ -177,30 +239,87 @@ export function SignIn() {
 
         {view === 'otp-input' && (
           <>
-            <h2 className="si-panel-title">Verify OTP</h2>
+            <h2 className="si-panel-title">Enter verification code</h2>
             <p className="si-hint">Code sent to {phone.trim()}</p>
-            <input
-              id="otp-input"
-              className="si-pill-input si-pill-input--otp"
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={6}
-              value={otp}
-              onChange={e => setOtp(e.target.value.replace(/\D/g, ''))}
-              autoFocus
-            />
-            <button
-              className="si-pill-btn si-pill-btn--action"
-              onClick={handleVerifyOtp}
-              disabled={loading || otp.length < 6}
-            >
-              {loading ? 'Verifying…' : 'Verify OTP'}
-            </button>
+
+            {isLockedOut ? (
+              <div className="si-lockout" role="alert">
+                <p className="si-lockout-title">Too many incorrect attempts</p>
+                <p className="si-lockout-sub">
+                  Try again in{' '}
+                  <span className="si-mono">{formatMMSS(lockoutCountdown)}</span>
+                </p>
+              </div>
+            ) : (
+              <>
+                <input
+                  id="otp-input"
+                  className="si-pill-input si-pill-input--otp"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  value={otp}
+                  onChange={e => setOtp(e.target.value.replace(/\D/g, ''))}
+                  autoFocus
+                />
+                <button
+                  className="si-pill-btn si-pill-btn--action"
+                  onClick={handleVerifyOtp}
+                  disabled={loading || otp.length < 6}
+                >
+                  {loading ? 'Verifying…' : 'Verify'}
+                </button>
+              </>
+            )}
+
+            {!isLockedOut && (
+              canResend ? (
+                <button
+                  type="button"
+                  className="si-resend si-resend--active"
+                  onClick={handleResendOtp}
+                  disabled={loading}
+                >
+                  Didn't receive code? Resend
+                </button>
+              ) : (
+                <p className="si-resend si-resend--countdown">
+                  Resend code in{' '}
+                  <span className="si-mono">0:{resendCountdown.toString().padStart(2, '0')}</span>
+                </p>
+              )
+            )}
+
+            {canResend && !isLockedOut && (
+              <div className="si-help">
+                <button
+                  type="button"
+                  className="si-help-toggle"
+                  onClick={() => setShowHelp(v => !v)}
+                  aria-expanded={showHelp}
+                >
+                  📱 Didn't get the code? {showHelp ? '▲' : '▼'}
+                </button>
+                {showHelp && (
+                  <div className="si-help-body">
+                    <p className="si-help-title">What to try:</p>
+                    <ul className="si-help-list">
+                      <li>Check your SMS inbox</li>
+                      <li>Make sure you entered the correct number</li>
+                      <li>Check if your phone has network signal</li>
+                      <li>Wait a minute and try resending</li>
+                      <li>Contact support if problem persists</li>
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
             <button
               className="si-back"
-              onClick={() => { setView('phone-input'); setOtp(''); clearError() }}
-              disabled={loading}
+              onClick={() => { setView('phone-input'); setOtp(''); setShowHelp(false); clearError() }}
+              disabled={loading || isLockedOut}
             >
               ← Change number
             </button>
@@ -266,6 +385,12 @@ function GoogleIcon() {
   )
 }
 
+function formatMMSS(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
 function parseAuthError(err: unknown): string {
   if (err != null && typeof err === 'object' && 'code' in err) {
     switch ((err as { code: string }).code) {
@@ -276,7 +401,11 @@ function parseAuthError(err: unknown): string {
       case 'auth/code-expired':
         return 'OTP expired. Please request a new one.'
       case 'auth/invalid-verification-code':
-        return 'Incorrect OTP. Please try again.'
+        return 'Wrong code. Try again.'
+      case 'auth/captcha-check-failed':
+        return 'Verification failed. Refresh and try again.'
+      case 'auth/network-request-failed':
+        return 'No internet connection. Check your network.'
       case 'auth/popup-closed-by-user':
       case 'auth/cancelled-popup-request':
         return ''

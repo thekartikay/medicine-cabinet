@@ -16,6 +16,7 @@ import { JoinHousehold } from './screens/JoinHousehold'
 import { InviteMember } from './screens/InviteMember'
 import { Dashboard } from './screens/Dashboard'
 import { ConsentScreen } from './screens/ConsentScreen'
+import { ProfileSetup } from './screens/ProfileSetup'
 import './App.css'
 
 type AppState =
@@ -23,6 +24,7 @@ type AppState =
   | 'unauthenticated'
   | 'consent-required'
   | 'consent-required-bumped'
+  | 'profile-setup-required'
   | 'restore-prompt'
   | 'deletion-scheduled'
   | 'choose-path'
@@ -139,6 +141,16 @@ function App() {
         return
       }
 
+      // AK-117 — Google provides displayName at sign-in; phone OTP and email
+      // sign-ins do not. Force those users through ProfileSetup before any
+      // household routing so memberships/invites don't get stamped with null
+      // names. Returning users already have displayName and skip this.
+      if (!firebaseUser.displayName || firebaseUser.displayName.trim() === '') {
+        setUser(firebaseUser)
+        setAppState('profile-setup-required')
+        return
+      }
+
       await resolvePostConsent(firebaseUser)
     })
   }, [])
@@ -185,6 +197,19 @@ function App() {
         user={user!}
         policyUpdated={appState === 'consent-required-bumped'}
         onConsented={() => resolvePostConsent(user!)}
+      />
+    )
+  }
+
+  if (appState === 'profile-setup-required') {
+    return (
+      <ProfileSetup
+        onComplete={() => {
+          // updateProfile resolved → auth.currentUser.displayName is now set.
+          // Resume the same post-consent routing the listener would have run.
+          setAppState('loading')
+          void resolvePostConsent(user!)
+        }}
       />
     )
   }

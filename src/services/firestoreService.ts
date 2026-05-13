@@ -86,6 +86,20 @@ export async function getUserDoc(uid: string): Promise<AppUser | null> {
   return snap.data() as AppUser
 }
 
+// AK-117 — Updates fields on users/{uid}. Used by ProfileSetup to persist the
+// name the user typed after sign-in, and reusable for future profile edits.
+// Merge keeps fields the caller didn't pass (e.g. createdAt, householdId).
+export async function updateUserProfile(
+  uid: string,
+  updates: { displayName?: string; phone?: string; email?: string },
+): Promise<void> {
+  await setDoc(
+    doc(db, userPath(uid)),
+    { ...updates, updatedAt: serverTimestamp() },
+    { merge: true },
+  )
+}
+
 // Note: household creation now lives in the createHousehold Cloud Function
 // (functions/src/index.ts). The client must call that function rather than
 // writing /households/* directly because Firestore Security Rules deny:
