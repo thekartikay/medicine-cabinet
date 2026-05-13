@@ -30,6 +30,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore'
 import { getAuth } from 'firebase-admin/auth'
 import { randomBytes } from 'node:crypto'
 import bcrypt from 'bcryptjs'
+import { ENFORCE_APP_CHECK } from './util/enforceAppCheck'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const E164_RE = /^\+[1-9]\d{1,14}$/
@@ -53,7 +54,7 @@ function assertAdmin(request: CallableRequest<unknown>): { uid: string; hId: str
 }
 
 export const createCaregiverGrant = onCall(
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     const { uid, hId } = assertAdmin(request)
 
@@ -121,7 +122,7 @@ export const createCaregiverGrant = onCall(
 export const acceptCaregiverGrant = onCall(
   // App Check still enforced even though Auth is not — anyone with the link
   // can call this, but the caller must be an attested MediCab build.
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     const raw = (request.data ?? {}) as {
       hId?: unknown
@@ -223,7 +224,7 @@ export const acceptCaregiverGrant = onCall(
 )
 
 export const revokeCaregiverGrant = onCall(
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     const { hId } = assertAdmin(request)
     const raw = (request.data ?? {}) as {
@@ -258,7 +259,7 @@ export const revokeCaregiverGrant = onCall(
 )
 
 export const listCaregiverGrants = onCall(
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     const { hId } = assertAdmin(request)
     const raw = (request.data ?? {}) as { memberId?: unknown }

@@ -22,6 +22,7 @@ import { defineSecret } from 'firebase-functions/params'
 import { getFirestore, FieldValue } from 'firebase-admin/firestore'
 import { GoogleGenAI } from '@google/genai'
 import { todayISTDateString } from './util/istDate'
+import { ENFORCE_APP_CHECK } from './util/enforceAppCheck'
 import type {
   CandidateMedicine,
   GeminiProxyRequest,
@@ -194,7 +195,7 @@ interface AuditLogEntry {
 
 export const geminiProxy = onCall(
   {
-    enforceAppCheck: true,
+    enforceAppCheck: ENFORCE_APP_CHECK,
     region: 'asia-south1',
     secrets: [GEMINI_API_KEY],
   },

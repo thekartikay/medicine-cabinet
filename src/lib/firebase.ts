@@ -2,8 +2,6 @@ import { initializeApp } from 'firebase/app';
 import {
   initializeAppCheck,
   ReCaptchaEnterpriseProvider,
-  getToken as getAppCheckToken,
-  type AppCheck,
 } from 'firebase/app-check';
 import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth';
 import {
@@ -29,49 +27,30 @@ const firebaseConfig = {
 
 export const app = initializeApp(firebaseConfig);
 
-// ─── App Check (MC-031) ─────────────────────────────────────────────────────
-// Initialised before Auth/Firestore/Functions so the reCAPTCHA Enterprise
-// provider can attach App Check tokens to every outbound request these
-// services make. We:
-//   • Skip init when there is no `window` (SSR / build-time evaluation).
-//     reCAPTCHA Enterprise only runs in a real browser; importing it server-
-//     side would throw on document/navigator access.
-//   • Skip init when VITE_RECAPTCHA_SITE_KEY is missing. Without a key we
-//     cannot mint tokens, but we still want the dev server to boot — calling
-//     code paths that require App Check will fail loudly at request time.
-//   • Set isTokenAutoRefreshEnabled so the SDK refreshes ahead of expiry
-//     without us building a manual refresh loop.
-export const appCheck: AppCheck | null = (() => {
-  if (typeof window === 'undefined') return null;
+// ─── App Check (MC-031) — production only ────────────────────────────────────
+// CLAUDE.md rule #9 ("App Check enforced on all Cloud Functions") is about
+// production. In the emulator, App Check would still talk to the real Firebase
+// App Check service (the emulator does not proxy it) and would block every
+// callable. The emulator is isolated from production and App Check there
+// protects nothing — so we skip client init in DEV entirely. Server-side
+// enforcement is gated by ENFORCE_APP_CHECK (process.env.FUNCTIONS_EMULATOR).
+//
+// In production we still need a `window` (reCAPTCHA Enterprise is browser-
+// only) and a configured VITE_RECAPTCHA_SITE_KEY.
+if (!import.meta.env.DEV && typeof window !== 'undefined') {
   const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined;
-  if (!siteKey) {
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[AppCheck] VITE_RECAPTCHA_SITE_KEY is not set — skipping App Check init. ' +
-        'Callable Cloud Functions with enforceAppCheck:true will reject requests until this is configured.',
-      );
-    }
-    return null;
-  }
-  return initializeAppCheck(app, {
-    provider: new ReCaptchaEnterpriseProvider(siteKey),
-    isTokenAutoRefreshEnabled: true,
-  });
-})();
-
-// Dev-only sanity check: confirm a token was actually minted, without
-// printing the token itself.
-if (import.meta.env.DEV && appCheck) {
-  getAppCheckToken(appCheck, /* forceRefresh */ false)
-    .then((result) => {
-      // eslint-disable-next-line no-console
-      console.log(`[AppCheck] Token issued, length: ${result.token.length} chars`);
-    })
-    .catch((err: unknown) => {
-      // eslint-disable-next-line no-console
-      console.warn('[AppCheck] Token request failed:', (err as Error)?.message ?? err);
+  if (siteKey) {
+    initializeAppCheck(app, {
+      provider: new ReCaptchaEnterpriseProvider(siteKey),
+      isTokenAutoRefreshEnabled: true,
     });
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[AppCheck] VITE_RECAPTCHA_SITE_KEY is not set in this production build — ' +
+      'callable Cloud Functions with enforceAppCheck:true will reject requests.',
+    );
+  }
 }
 
 export const auth = getAuth(app);
@@ -83,10 +62,17 @@ export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
 
 if (import.meta.env.DEV) {
+  // Must be set BEFORE connectAuthEmulator. Tells the Auth SDK to skip both
+  // the reCAPTCHA Enterprise enforcement-config fetch (which the emulator
+  // 501s on) and real reCAPTCHA verification. The stub ApplicationVerifier
+  // in SignIn.tsx is still required by the signInWithPhoneNumber signature,
+  // but the SDK no longer validates it.
+  auth.settings.appVerificationDisabledForTesting = true;
   connectAuthEmulator(auth, 'http://localhost:9099');
   connectFirestoreEmulator(db, 'localhost', 8080);
   connectFunctionsEmulator(functions, 'localhost', 5001);
 }
+
 
 // getMessaging throws in environments that don't support the Push API (e.g. iOS webview without entitlement)
 export const messaging = (() => {

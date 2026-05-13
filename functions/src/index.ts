@@ -8,6 +8,7 @@ import { getAuth } from 'firebase-admin/auth'
 import { getMessaging } from 'firebase-admin/messaging'
 import { randomUUID } from 'node:crypto'
 import { todayISTDateString } from './util/istDate'
+import { ENFORCE_APP_CHECK } from './util/enforceAppCheck'
 
 // MC-004 — Gemini API proxy. Re-exported so deploy picks it up.
 export { geminiProxy } from './geminiProxy'
@@ -68,7 +69,7 @@ function computeJoinCode(hId: string): string {
 }
 
 export const joinHousehold = onCall(
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Sign in required to join a household.')
@@ -149,7 +150,7 @@ export const joinHousehold = onCall(
 )
 
 export const createHousehold = onCall(
-  { enforceAppCheck: true },
+  { enforceAppCheck: ENFORCE_APP_CHECK },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Sign in required to create a household.')
@@ -383,7 +384,7 @@ export const scheduleDoseNotifications = onSchedule(
 // per project; the only abuse vector is "send a push to yourself", which is
 // harmless. Refuse if no token is registered.
 export const testSendNotification = onCall(
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     let uid: string | undefined = request.auth?.uid
 
@@ -447,7 +448,7 @@ export const testSendNotification = onCall(
 // failed-precondition if the patient has no FCM token registered or has push
 // notifications disabled — the client surfaces these as a distinct toast.
 export const sendDoseReminder = onCall(
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Must be signed in')
@@ -846,7 +847,7 @@ export const onRestockRequested = onDocumentCreated(
 // here bypasses rules. Used by Treatments.tsx for acute / prn treatments
 // where preserving history isn't valuable enough to keep the document.
 export const deleteTreatment = onCall(
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Sign in required')
@@ -1374,7 +1375,7 @@ async function resolveUserHouseholds(uid: string, userData: FirebaseFirestore.Do
 }
 
 export const deleteAccount = onCall(
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Sign in required to delete your account.')
@@ -1438,7 +1439,7 @@ export const deleteAccount = onCall(
 )
 
 export const restoreAccount = onCall(
-  { enforceAppCheck: true, region: 'asia-south1' },
+  { enforceAppCheck: ENFORCE_APP_CHECK, region: 'asia-south1' },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Sign in required to restore your account.')
