@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { FirebaseError } from 'firebase/app'
 import {
   signInWithPopup,
   signInWithPhoneNumber,
@@ -6,6 +7,7 @@ import {
   type ConfirmationResult,
 } from 'firebase/auth'
 import { auth, googleProvider } from '../lib/firebase'
+import { AuthErrorModal } from '../components/AuthErrorModal'
 
 type View = 'options' | 'phone-input' | 'otp-input'
 
@@ -19,7 +21,7 @@ export function SignIn() {
   const [view, setView] = useState<View>('options')
   const [phone, setPhone] = useState('+91 ')
   const [otp, setOtp] = useState('')
-  const [error, setError] = useState('')
+  const [authError, setAuthError] = useState<FirebaseError | Error | null>(null)
   const [loading, setLoading] = useState(false)
 
   // AK-112 — resend timer, help-toggle, attempt counter, and lockout.
@@ -68,18 +70,23 @@ export function SignIn() {
   const canResend = resendCountdown === 0
   const isLockedOut = lockoutCountdown > 0
 
-  function clearError() {
-    setError('')
+  function clearAuthError() {
+    setAuthError(null)
+  }
+
+  function asAuthError(err: unknown): FirebaseError | Error {
+    if (err instanceof Error) return err
+    return new Error(typeof err === 'string' ? err : 'Something went wrong. Please try again.')
   }
 
   async function handleGoogleSignIn() {
-    clearError()
+    clearAuthError()
     setLoading(true)
     try {
       await signInWithPopup(auth, googleProvider)
       // onAuthStateChanged in App.tsx drives the transition to Welcome
     } catch (err) {
-      setError(parseAuthError(err))
+      setAuthError(asAuthError(err))
     } finally {
       setLoading(false)
     }
@@ -87,7 +94,7 @@ export function SignIn() {
 
   async function handleSendOtp() {
     if (isLockedOut) return
-    clearError()
+    clearAuthError()
     setLoading(true)
     try {
       const normalizedPhone = phone.replace(/\s/g, '')
@@ -117,7 +124,7 @@ export function SignIn() {
     } catch (err) {
       recaptchaRef.current?.clear()
       recaptchaRef.current = null
-      setError(parseAuthError(err))
+      setAuthError(asAuthError(err))
     } finally {
       setLoading(false)
     }
@@ -134,7 +141,7 @@ export function SignIn() {
 
   async function handleVerifyOtp() {
     if (!confirmationRef.current || isLockedOut) return
-    clearError()
+    clearAuthError()
     setLoading(true)
     try {
       await confirmationRef.current.confirm(otp)
@@ -147,15 +154,19 @@ export function SignIn() {
         setOtp('')
         if (nextAttempts >= MAX_OTP_ATTEMPTS) {
           setLockoutCountdown(LOCKOUT_SECONDS)
-          setError('')
+          setAuthError(null)
         } else {
           const remaining = MAX_OTP_ATTEMPTS - nextAttempts
-          setError(
-            `Wrong code. ${remaining} attempt${remaining === 1 ? '' : 's'} left.`,
+          // Synthesized informational message — not a Firebase error, but the
+          // modal accepts any Error and renders error.message verbatim.
+          setAuthError(
+            new Error(
+              `Wrong code. ${remaining} attempt${remaining === 1 ? '' : 's'} left.`,
+            ),
           )
         }
       } else {
-        setError(parseAuthError(err))
+        setAuthError(asAuthError(err))
       }
     } finally {
       setLoading(false)
@@ -195,7 +206,7 @@ export function SignIn() {
 
             <button
               className="si-pill-btn"
-              onClick={() => { setView('phone-input'); clearError() }}
+              onClick={() => { setView('phone-input'); clearAuthError() }}
               disabled={loading}
             >
               <span className="si-pill-icon-wrap si-pill-icon--phone">
@@ -229,7 +240,7 @@ export function SignIn() {
             </button>
             <button
               className="si-back"
-              onClick={() => { setView('options'); setPhone('+91 '); clearError() }}
+              onClick={() => { setView('options'); setPhone('+91 '); clearAuthError() }}
               disabled={loading}
             >
               ← Back
@@ -318,7 +329,7 @@ export function SignIn() {
 
             <button
               className="si-back"
-              onClick={() => { setView('phone-input'); setOtp(''); setShowHelp(false); clearError() }}
+              onClick={() => { setView('phone-input'); setOtp(''); setShowHelp(false); clearAuthError() }}
               disabled={loading || isLockedOut}
             >
               ← Change number
@@ -326,13 +337,13 @@ export function SignIn() {
           </>
         )}
 
-        {error && <p className="si-error" role="alert">{error}</p>}
-
         <p className="si-footer">🔒 Secure Encrypted Access</p>
       </div>
 
       {/* Invisible reCAPTCHA anchor — must be in DOM before signInWithPhoneNumber */}
       <div id="recaptcha-container" />
+
+      <AuthErrorModal error={authError} onClose={clearAuthError} />
     </div>
   )
 }
@@ -391,26 +402,3 @@ function formatMMSS(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-function parseAuthError(err: unknown): string {
-  if (err != null && typeof err === 'object' && 'code' in err) {
-    switch ((err as { code: string }).code) {
-      case 'auth/invalid-phone-number':
-        return 'Invalid phone number. Use the format: +91 XXXXX XXXXX'
-      case 'auth/too-many-requests':
-        return 'Too many attempts. Please try again later.'
-      case 'auth/code-expired':
-        return 'OTP expired. Please request a new one.'
-      case 'auth/invalid-verification-code':
-        return 'Wrong code. Try again.'
-      case 'auth/captcha-check-failed':
-        return 'Verification failed. Refresh and try again.'
-      case 'auth/network-request-failed':
-        return 'No internet connection. Check your network.'
-      case 'auth/popup-closed-by-user':
-      case 'auth/cancelled-popup-request':
-        return ''
-    }
-  }
-  if (err instanceof Error) return err.message
-  return 'Something went wrong. Please try again.'
-}

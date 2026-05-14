@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import type { FirebaseError } from 'firebase/app'
 import { updateProfile } from 'firebase/auth'
 import { auth } from '../lib/firebase'
 import { updateUserProfile } from '../services/firestoreService'
+import { AuthErrorModal } from '../components/AuthErrorModal'
 
 // AK-117 — Collected after sign-in for any provider that does not surface a
 // displayName (phone OTP, email/password). Google sign-in already supplies
@@ -13,26 +15,32 @@ interface ProfileSetupProps {
 export function ProfileSetup({ onComplete }: ProfileSetupProps) {
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Inline validation feedback for pre-submission rules (empty, too short,
+  // too long). Kept separate from authError because instant inline feedback
+  // is the right UX for typing-time rules.
+  const [validationError, setValidationError] = useState<string | null>(null)
+  // Surface backend / Firebase failures through the shared modal.
+  const [authError, setAuthError] = useState<FirebaseError | Error | null>(null)
 
   async function handleSubmit() {
     const trimmedName = name.trim()
 
     if (!trimmedName) {
-      setError('Please enter your name')
+      setValidationError('Please enter your name')
       return
     }
     if (trimmedName.length < 2) {
-      setError('Name must be at least 2 characters')
+      setValidationError('Name must be at least 2 characters')
       return
     }
     if (trimmedName.length > 50) {
-      setError('Name must be 50 characters or less')
+      setValidationError('Name must be 50 characters or less')
       return
     }
 
     setLoading(true)
-    setError(null)
+    setValidationError(null)
+    setAuthError(null)
 
     try {
       const user = auth.currentUser
@@ -45,8 +53,12 @@ export function ProfileSetup({ onComplete }: ProfileSetupProps) {
       await user.getIdToken(true)
 
       onComplete()
-    } catch {
-      setError('Could not save your name. Please try again.')
+    } catch (err) {
+      setAuthError(
+        err instanceof Error
+          ? err
+          : new Error('Could not save your name. Please try again.'),
+      )
     } finally {
       setLoading(false)
     }
@@ -74,7 +86,9 @@ export function ProfileSetup({ onComplete }: ProfileSetupProps) {
           disabled={loading}
         />
 
-        {error && <div className="ps-error" role="alert">{error}</div>}
+        {validationError && (
+          <div className="ps-error" role="alert">{validationError}</div>
+        )}
 
         <button
           className="ps-button"
@@ -84,6 +98,8 @@ export function ProfileSetup({ onComplete }: ProfileSetupProps) {
           {loading ? 'Saving…' : 'Continue'}
         </button>
       </div>
+
+      <AuthErrorModal error={authError} onClose={() => setAuthError(null)} />
     </div>
   )
 }

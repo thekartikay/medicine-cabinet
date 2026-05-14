@@ -99,6 +99,60 @@
 .ps-button:hover:not(:disabled) { opacity: 0.9; }
 .ps-button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ── AuthErrorModal (ae- prefix) ────────────────────────────── */
+
+.ae-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 1000;
+}
+
+.ae-card {
+  background: #ffffff;
+  border-radius: 24px;
+  max-width: 24rem;
+  width: 100%;
+  padding: 1.5rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.ae-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #106470;
+  margin: 0 0 0.5rem 0;
+}
+
+.ae-message {
+  font-size: 0.95rem;
+  color: #444;
+  line-height: 1.45;
+  margin: 0 0 1.5rem 0;
+}
+
+.ae-button {
+  width: 100%;
+  padding: 0.875rem 1.25rem;
+  background-color: #5DC1C8;
+  color: #ffffff;
+  border: none;
+  border-radius: 9999px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.ae-button:hover { opacity: 0.9; }
+.ae-button:active { opacity: 0.8; }
+
 /* ── Sign-in screen ─────────────────────────────────────────── */
 
 .si-root {
