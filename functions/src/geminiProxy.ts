@@ -650,9 +650,16 @@ export const geminiProxy = onCall(
     const response: GeminiProxyResponse = {
       kind: 'answer',
       text: parsed.answer,
-      confidence: parsed.confidence,
+      confidence: parsed.confidence as 'high' | 'medium',
       medicinesReferenced: parsed.medicines_referenced,
       sources,
+      // AK-39 — Structured interaction flag from the model. Falls back to
+      // hasInteraction=false when the model omits the new keys (graceful
+      // degrade), so the client never sees a misleading positive.
+      interactionFlag: {
+        hasInteraction: parsed.has_interaction === true,
+        riskLevel: parsed.risk_level ?? null,
+      },
     }
     await writeAuditLog({
       queryType: 'drug_interaction',
@@ -838,6 +845,8 @@ function buildInteractionPrompt(subset: CabinetContextItem[]): string {
     '- is_diagnostic: boolean — should always be false here',
     '- is_emergency: boolean — should always be false here',
     '- sources: string[] — every medicine name involved in a reported interaction (must come from the items above)',
+    '- has_interaction: boolean — true if any interaction was found, false if none',
+    '- risk_level: "moderate" | "high" | null — severity of the most serious interaction; null if has_interaction is false',
   ].join('\n')
 }
 
@@ -850,6 +859,12 @@ interface ParsedGemini {
   is_diagnostic: boolean
   is_emergency: boolean
   sources?: string[]
+  // AK-39 / drug-interaction structured-flag fields. Optional because
+  // cabinet_query never produces them, and a non-compliant drug_interaction
+  // response should still reach the existing validation ladder rather than
+  // hard-failing on missing new keys.
+  has_interaction?: boolean
+  risk_level?: 'moderate' | 'high' | null
 }
 
 interface GeminiUsage {
