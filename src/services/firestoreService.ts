@@ -255,6 +255,50 @@ export async function createTreatment(
   return tId
 }
 
+// AK-39 sub-task 2 — Collects the cabinet items currently driving active
+// treatments for a given member. Used by the treatment-create flow to
+// pre-check interactions when the user picks a new medicine for that member.
+//
+// Returns one entry per regimen on each active treatment (a treatment can
+// have multiple regimens; each pins one cabinet item). The shape is
+// intentionally narrow — only the fields the interaction check needs.
+//
+// Fails silently: any read error returns []. The interaction check is a
+// soft UX nudge, never load-bearing for the create flow.
+export async function getActiveTreatmentMedicines(
+  hId: string,
+  memberId: string,
+): Promise<Array<{ cabinetItemId: string; displayName: string; medicineId: string }>> {
+  try {
+    const treatments = await getDocs(
+      query(
+        collection(db, treatmentsCollectionPath(hId)),
+        where('memberId', '==', memberId),
+        where('status', '==', 'active'),
+      ),
+    )
+    const out: Array<{ cabinetItemId: string; displayName: string; medicineId: string }> = []
+    for (const tDoc of treatments.docs) {
+      const tId = tDoc.id
+      const regimens = await getDocs(
+        collection(db, regimensCollectionPath(hId, tId)),
+      )
+      for (const rDoc of regimens.docs) {
+        const r = rDoc.data() as Regimen
+        if (!r.cabinetItemId) continue
+        out.push({
+          cabinetItemId: r.cabinetItemId,
+          displayName: r.displayName,
+          medicineId: r.medicineId,
+        })
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
 export async function addRegimen(
   hId: string,
   tId: string,

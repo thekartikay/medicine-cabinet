@@ -123,21 +123,23 @@ export async function checkDrugInteraction(
 // the existing proxy returns prose, not a structured boolean, so this
 // parse-on-client step is a known v1 limitation.
 //
-// Callers should fire-and-forget; never await this for UI gating.
+// Callers should fire-and-forget for the passive cabinet-add case; the
+// treatment-create gate (AK-39 sub-task 2) awaits the result to drive a
+// confirm modal but tolerates rejection / errors as no-warning.
 export async function checkCabinetInteractions(
   newItem: CabinetItem,
-  otherItems: CabinetItem[],
+  otherCabinetItemIds: string[],
 ): Promise<{
   hasInteraction: boolean
   riskLevel: 'moderate' | 'high'
   withMedicineNames: string[]
   description: string
 } | null> {
-  if (otherItems.length === 0) return null
+  if (otherCabinetItemIds.length === 0) return null
 
   const candidate = candidateMedicineFromItem(newItem)
   const response = await checkDrugInteraction(
-    otherItems.map((it) => it.iId),
+    otherCabinetItemIds,
     newItem.hId,
     newItem.cId,
     candidate,
