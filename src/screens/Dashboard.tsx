@@ -240,16 +240,10 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
     return () => { cancelled = true }
   }, [user.uid])
 
-  // Three independent gates, all required:
-  //   1. role === 'admin'   — defensive; subscriptionTier is per-user, but
-  //                           members never see Cabinet Query (the admin
-  //                           pays for the household's plan).
-  //   2. tier === 'family'  — paid plan only.
-  //   3. CABINET_QUERY_ENABLED — build-time feature flag for staged rollout.
-  const showCabinetQueryFAB =
-    role === 'admin'
-    && subscriptionTier === 'family'
-    && CABINET_QUERY_ENABLED
+  // Two gates: admin role + closed-beta feature flag. Members never see
+  // Cabinet Query — the admin owns the household's plan.
+  // subscription gate re-added when MC-016 (paywall) ships
+  const showCabinetQueryFAB = role === 'admin' && CABINET_QUERY_ENABLED
 
   async function sendReminder(slot: DoseSlotDisplay) {
     // Optimistic — disable the button immediately. Roll back on failure.
