@@ -56,6 +56,20 @@ function App() {
   // the consent-completion handler can re-enter the same flow without
   // duplicating it.
   async function resolvePostConsent(firebaseUser: User) {
+    // AK-117 — displayName gate. Every path into post-auth routing converges
+    // here (the auth listener after consent, the ConsentScreen onConsented
+    // callback, the RestorePromptScreen onRestored callback, and the
+    // ProfileSetup onComplete callback). Phone OTP and email sign-ins arrive
+    // with displayName=null; Google supplies it. Without this gate the fresh
+    // phone-OTP flow goes consent → choose-path and skips ProfileSetup, since
+    // the listener-level check below only fires when consent is already
+    // satisfied (which is never true on first sign-in).
+    if (!firebaseUser.displayName || firebaseUser.displayName.trim() === '') {
+      setUser(firebaseUser)
+      setAppState('profile-setup-required')
+      return
+    }
+
     try {
       const appUser = await getUserDoc(firebaseUser.uid)
 
@@ -141,16 +155,10 @@ function App() {
         return
       }
 
-      // AK-117 — Google provides displayName at sign-in; phone OTP and email
-      // sign-ins do not. Force those users through ProfileSetup before any
-      // household routing so memberships/invites don't get stamped with null
-      // names. Returning users already have displayName and skip this.
-      if (!firebaseUser.displayName || firebaseUser.displayName.trim() === '') {
-        setUser(firebaseUser)
-        setAppState('profile-setup-required')
-        return
-      }
-
+      // resolvePostConsent owns the AK-117 displayName gate (and all
+      // subsequent household routing) so every entry point — this listener,
+      // ConsentScreen.onConsented, RestorePromptScreen.onRestored, and
+      // ProfileSetup.onComplete — flows through the same check.
       await resolvePostConsent(firebaseUser)
     })
   }, [])
