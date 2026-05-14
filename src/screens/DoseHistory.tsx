@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, Check, X, Minus, Clock } from 'lucide-react'
+import { ChevronLeft, Check, X, Minus, Clock, History } from 'lucide-react'
 import {
   loadLogsForDateRange,
   loadAllActiveRegimens,
@@ -233,7 +233,9 @@ export function DoseHistory({ hId, onBack, filterUid }: Props) {
         if (visible.length === 0) {
           return (
             <div className="db-card db-empty-state">
-              <span className="db-empty-icon" aria-hidden="true">📜</span>
+              <div className="empty-state-icon">
+                <History size={28} color="#5DC1C8" />
+              </div>
               <p className="db-empty-text">No dose history yet</p>
               <p className="db-empty-sub">Logs from the last 7 days will appear here.</p>
             </div>
