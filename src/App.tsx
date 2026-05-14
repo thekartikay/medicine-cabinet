@@ -17,6 +17,7 @@ import { InviteMember } from './screens/InviteMember'
 import { Dashboard } from './screens/Dashboard'
 import { ConsentScreen } from './screens/ConsentScreen'
 import { ProfileSetup } from './screens/ProfileSetup'
+import { OfflineBanner } from './components/OfflineBanner'
 import './App.css'
 
 type AppState =
@@ -187,89 +188,100 @@ function App() {
     setAppState('dashboard')
   }
 
-  if (appState === 'loading') {
-    return (
-      <div className="app-loading" aria-label="Loading">
-        <div className="loading-spinner" role="status" />
-      </div>
-    )
+  // Existing state-machine return logic, unchanged. Pulled into a helper so
+  // the top-level return can wrap it alongside the global OfflineBanner.
+  function renderScreen() {
+    if (appState === 'loading') {
+      return (
+        <div className="app-loading" aria-label="Loading">
+          <div className="loading-spinner" role="status" />
+        </div>
+      )
+    }
+
+    if (appState === 'unauthenticated') {
+      return <SignIn />
+    }
+
+    if (appState === 'consent-required' || appState === 'consent-required-bumped') {
+      return (
+        <ConsentScreen
+          user={user!}
+          policyUpdated={appState === 'consent-required-bumped'}
+          onConsented={() => resolvePostConsent(user!)}
+        />
+      )
+    }
+
+    if (appState === 'profile-setup-required') {
+      return (
+        <ProfileSetup
+          onComplete={() => {
+            // updateProfile resolved → auth.currentUser.displayName is now set.
+            // Resume the same post-consent routing the listener would have run.
+            setAppState('loading')
+            void resolvePostConsent(user!)
+          }}
+        />
+      )
+    }
+
+    if (appState === 'restore-prompt') {
+      return <RestorePromptScreen user={user!} onRestored={() => resolvePostConsent(user!)} />
+    }
+
+    if (appState === 'deletion-scheduled') {
+      return <DeletionScheduledScreen />
+    }
+
+    if (appState === 'choose-path') {
+      return (
+        <ChoosePath
+          onCreate={() => setAppState('creating-household')}
+          onJoin={() => setAppState('joining-household')}
+        />
+      )
+    }
+
+    if (appState === 'creating-household') {
+      return (
+        <CreateHousehold
+          user={user!}
+          onCreated={onHouseholdCreated}
+          onBack={() => setAppState('choose-path')}
+        />
+      )
+    }
+
+    if (appState === 'joining-household') {
+      return (
+        <JoinHousehold
+          user={user!}
+          onJoined={onHouseholdJoined}
+          onBack={() => setAppState('choose-path')}
+        />
+      )
+    }
+
+    if (appState === 'inviting-member') {
+      return (
+        <InviteMember
+          household={household!}
+          adminName={user?.displayName?.trim() || 'A family member'}
+          onDone={onInviteDone}
+        />
+      )
+    }
+
+    return <Dashboard user={user!} household={household!} role={role} onAccountDeleted={() => setAppState('deletion-scheduled')} />
   }
 
-  if (appState === 'unauthenticated') {
-    return <SignIn />
-  }
-
-  if (appState === 'consent-required' || appState === 'consent-required-bumped') {
-    return (
-      <ConsentScreen
-        user={user!}
-        policyUpdated={appState === 'consent-required-bumped'}
-        onConsented={() => resolvePostConsent(user!)}
-      />
-    )
-  }
-
-  if (appState === 'profile-setup-required') {
-    return (
-      <ProfileSetup
-        onComplete={() => {
-          // updateProfile resolved → auth.currentUser.displayName is now set.
-          // Resume the same post-consent routing the listener would have run.
-          setAppState('loading')
-          void resolvePostConsent(user!)
-        }}
-      />
-    )
-  }
-
-  if (appState === 'restore-prompt') {
-    return <RestorePromptScreen user={user!} onRestored={() => resolvePostConsent(user!)} />
-  }
-
-  if (appState === 'deletion-scheduled') {
-    return <DeletionScheduledScreen />
-  }
-
-  if (appState === 'choose-path') {
-    return (
-      <ChoosePath
-        onCreate={() => setAppState('creating-household')}
-        onJoin={() => setAppState('joining-household')}
-      />
-    )
-  }
-
-  if (appState === 'creating-household') {
-    return (
-      <CreateHousehold
-        user={user!}
-        onCreated={onHouseholdCreated}
-        onBack={() => setAppState('choose-path')}
-      />
-    )
-  }
-
-  if (appState === 'joining-household') {
-    return (
-      <JoinHousehold
-        user={user!}
-        onJoined={onHouseholdJoined}
-        onBack={() => setAppState('choose-path')}
-      />
-    )
-  }
-
-  if (appState === 'inviting-member') {
-    return (
-      <InviteMember
-        household={household!}
-        adminName={user?.displayName?.trim() || 'A family member'}
-        onDone={onInviteDone}
-      />
-    )
-  }
-
-  return <Dashboard user={user!} household={household!} role={role} onAccountDeleted={() => setAppState('deletion-scheduled')} />
+  return (
+    <>
+      <OfflineBanner />
+      {renderScreen()}
+    </>
+  )
 }
 
 // MC-017a — shown when a user signs back in inside the 30-day recovery window.

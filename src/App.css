@@ -153,6 +153,27 @@
 .ae-button:hover { opacity: 0.9; }
 .ae-button:active { opacity: 0.8; }
 
+/* ── OfflineBanner (ob- prefix) ─────────────────────────────── */
+
+.ob-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 150;
+  background-color: #EF9F27;
+  color: #106470;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: center;
+  padding: 0.4rem 1rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
 /* ── Sign-in screen ─────────────────────────────────────────── */
 
 .si-root {
