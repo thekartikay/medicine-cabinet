@@ -22,7 +22,6 @@ import {
   subscribeNotifications,
   subscribeTodaySummary,
   getMemberDisplayName,
-  getUserDoc,
 } from '../services/firestoreService'
 import type { TodaySummary } from '../types'
 import { NotificationsPanel } from './NotificationsPanel'
@@ -194,9 +193,6 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   // MC-004 — Cabinet Query modal open state. Replaces the prior "AI coming
   // soon" placeholder.
   const [cabinetQueryOpen, setCabinetQueryOpen] = useState(false)
-  // Subscription tier drives FAB visibility (per-user). Defaults to undefined
-  // until users/{uid} loads; treat any non-'family' value as free-tier.
-  const [subscriptionTier, setSubscriptionTier] = useState<string | undefined>(undefined)
   const [stockItems, setStockItems] = useState<CabinetItem[]>([])
   const [todaysDoses, setTodaysDoses] = useState<DoseSlotDisplay[]>([])
   const [logsBySlot, setLogsBySlot] = useState<Record<string, LogState>>({})
@@ -228,17 +224,6 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   // re-renders when a name resolves so the JSX picks it up.
   const adminNameCache = useRef<Map<string, string | null>>(new Map())
   const [adminNameByUid, setAdminNameByUid] = useState<Record<string, string>>({})
-
-  // MC-004 — load the user's subscription tier once on mount. The proxy
-  // server-side rate-limits regardless, so this is purely for FAB
-  // visibility. Failures fall back to undefined → treated as non-family.
-  useEffect(() => {
-    let cancelled = false
-    getUserDoc(user.uid)
-      .then(u => { if (!cancelled) setSubscriptionTier((u as { subscriptionTier?: string } | null)?.subscriptionTier) })
-      .catch(() => { /* keep undefined; FAB stays hidden */ })
-    return () => { cancelled = true }
-  }, [user.uid])
 
   // Two gates: admin role + closed-beta feature flag. Members never see
   // Cabinet Query — the admin owns the household's plan.
