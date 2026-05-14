@@ -1152,6 +1152,24 @@
   flex: 1;
 }
 
+/* AK-39 / catalog-enrichment — strength is two side-by-side controls: a free
+   text input for the numeric value, then a fixed-width select for the unit
+   suffix. Lives inside one .cb-field so the row aligns with the dosage-form
+   field next to it. */
+.cb-strength-row {
+  display: flex;
+  gap: 8px;
+}
+
+.cb-strength-row > .cb-input:first-child {
+  flex: 1;
+}
+
+.cb-strength-row > .cb-select {
+  width: 96px;
+  flex: 0 0 96px;
+}
+
 .cb-label {
   font-size: 9px;
   font-weight: 800;

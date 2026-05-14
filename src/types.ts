@@ -92,11 +92,28 @@ export interface Cabinet {
   createdAt: Timestamp
 }
 
-export type CabinetItemUnit = 'tablet' | 'ml' | 'capsule' | 'spray' | 'dose'
+export type CabinetItemUnit =
+  | 'tablet' | 'ml' | 'capsule' | 'spray' | 'dose'
+  // Catalog-enrichment expansion — count units that match the new
+  // dosage-form variants (inhaler puffs, drop bottles, transdermal patches,
+  // topical applications). 'other' is the sentinel for "user typed a custom
+  // unit"; the saved CabinetItem.unit field carries the typed string verbatim.
+  | 'puff' | 'drop' | 'application' | 'patch' | 'other'
 
 export type DosageForm =
   | 'tablet' | 'capsule' | 'syrup' | 'injection' | 'cream'
   | 'drops'  | 'spray'   | 'powder' | 'inhaler'  | 'patch'
+  // Catalog-enrichment additions — semicolon between cream/ointment distinct
+  // (ointments are oil-based, creams are water-based), and dispersible
+  // tablets are common in paediatric cabinets.
+  | 'ointment' | 'dispersible'
+
+// AK-39 / catalog-enrichment — units the strength input can carry. The form
+// stores the numeric value separately from the unit so we can keep autocomplete
+// and validation predictable. Both `mg` and `mcg` are common for the same
+// medicine family (e.g. paracetamol mg, salbutamol mcg).
+export type StrengthUnit = 'mg' | 'mcg' | 'g' | 'ml' | 'IU' | '%'
+export const STRENGTH_UNITS: StrengthUnit[] = ['mg', 'mcg', 'g', 'ml', 'IU', '%']
 
 export interface CabinetItem {
   iId: string
@@ -134,6 +151,13 @@ export interface MasterMedicine {
   medicineId: string
   name: string
   activeIngredient: string | null
+  // AK-39 / catalog-enrichment — populated by scripts/enrichMasterDb.ts.
+  // Older / un-enriched docs read as undefined; the cabinet add-medicine
+  // form pre-fills these when present and leaves the field blank otherwise.
+  brandName?: string | null
+  strength?: string | null
+  dosageForm?: string | null
+  activeIngredients?: string | null
 }
 
 // ── Treatments ────────────────────────────────────────────────

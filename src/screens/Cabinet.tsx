@@ -20,8 +20,10 @@ import type {
   MasterMedicine,
   Regimen,
   RestockRequest,
+  StrengthUnit,
   Treatment,
 } from '../types'
+import { STRENGTH_UNITS } from '../types'
 import { timeAgo } from './NotificationsPanel'
 
 type CabinetView = 'list' | 'search' | 'enrich' | 'cabinet-details'
@@ -35,28 +37,69 @@ interface Props {
 }
 
 const DOSAGE_FORM_LABELS: Record<DosageForm, string> = {
-  tablet:    'Tablet',
-  capsule:   'Capsule',
-  syrup:     'Syrup',
-  injection: 'Injection',
-  cream:     'Cream',
-  drops:     'Drops',
-  spray:     'Spray',
-  powder:    'Powder',
-  inhaler:   'Inhaler',
-  patch:     'Patch',
+  tablet:      'Tablet',
+  capsule:     'Capsule',
+  syrup:       'Syrup',
+  injection:   'Injection',
+  cream:       'Cream',
+  ointment:    'Ointment',
+  dispersible: 'Dispersible Tablet',
+  drops:       'Drops',
+  spray:       'Spray',
+  powder:      'Powder',
+  inhaler:     'Inhaler',
+  patch:       'Patch',
 }
 
 const UNIT_LABELS: Record<CabinetItemUnit, string> = {
-  tablet:  'Tablets',
-  capsule: 'Capsules',
-  ml:      'ml',
-  spray:   'Sprays',
-  dose:    'Doses',
+  tablet:      'Tablets',
+  capsule:     'Capsules',
+  ml:          'ml',
+  spray:       'Sprays',
+  dose:        'Doses',
+  puff:        'Puffs',
+  drop:        'Drops',
+  application: 'Applications',
+  patch:       'Patches',
+  other:       'Other (specify)',
 }
 
+// AK-39 / catalog-enrichment — when the user picks a dosage form, suggest a
+// count unit that fits. The form-dropdown's onChange and the masterDb pre-fill
+// both run this. Returns null for "no obvious match — leave current selection
+// alone" (powder is the only case today).
+function suggestUnitForForm(form: DosageForm): CabinetItemUnit | null {
+  switch (form) {
+    case 'inhaler':     return 'puff'
+    case 'drops':       return 'drop'
+    case 'patch':       return 'patch'
+    case 'syrup':       return 'ml'
+    case 'cream':
+    case 'ointment':    return 'application'
+    case 'injection':   return 'dose'
+    case 'tablet':      return 'tablet'
+    case 'capsule':     return 'capsule'
+    case 'dispersible': return 'tablet'
+    case 'spray':       return 'spray'
+    case 'powder':      return null
+  }
+}
+
+// Whitelist used to guard the masterDb-driven dosageForm pre-fill. If an
+// older masterDb doc carries a value that isn't a member of DosageForm we
+// skip the pre-fill rather than feeding the select a value it can't render.
+const ALLOWED_DOSAGE_FORMS: DosageForm[] = [
+  'tablet', 'capsule', 'syrup', 'injection', 'cream',
+  'drops', 'spray', 'powder', 'inhaler', 'patch',
+]
+
+// AK-39 / catalog-enrichment — append the strength to the resolved name when
+// available. Items added before masterDb was enriched (or where the user
+// skipped the strength field) fall back to just the base name unchanged.
 function itemDisplayName(item: CabinetItem): string {
-  return item.displayNameOverride ?? item.brandName ?? item.medicineId
+  const base = item.displayNameOverride ?? item.brandName ?? item.medicineId
+  const strength = item.strength ? ` · ${item.strength}` : ''
+  return `${base}${strength}`
 }
 
 function getStatus(item: CabinetItem): 'in-stock' | 'low-stock' | 'expired' {
@@ -109,9 +152,15 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   // ── manual / enrichment form state ─────────────────────────────
   const [formBrand,   setFormBrand]   = useState('')
   const [formDosageForm, setFormDosageForm] = useState<DosageForm>('tablet')
-  const [formStrength, setFormStrength] = useState('')
+  // AK-39 / catalog-enrichment — strength is now (numeric value, unit suffix).
+  // On save we combine them into a single string, or null if value is blank.
+  const [formStrengthValue, setFormStrengthValue] = useState('')
+  const [formStrengthUnit, setFormStrengthUnit] = useState<StrengthUnit>('mg')
   const [formQuantity, setFormQuantity] = useState('')
   const [formUnit, setFormUnit] = useState<CabinetItemUnit>('tablet')
+  // Free-text label written into the saved CabinetItem.unit when formUnit
+  // is 'other'. Spec stores the typed string verbatim in the unit field.
+  const [formCustomUnit, setFormCustomUnit] = useState('')
   const [formExpiry, setFormExpiry] = useState('')
   // Optional details
   const [showOptional, setShowOptional] = useState(false)
@@ -250,9 +299,11 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   function resetForm() {
     setFormBrand('')
     setFormDosageForm('tablet')
-    setFormStrength('')
+    setFormStrengthValue('')
+    setFormStrengthUnit('mg')
     setFormQuantity('')
     setFormUnit('tablet')
+    setFormCustomUnit('')
     setFormExpiry('')
     setShowOptional(false)
     setFormActiveIngr('')
@@ -275,15 +326,55 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
     setView('search')
   }
 
-  function startEnrich(prefillBrand = '') {
+  // AK-39 / catalog-enrichment — when a masterDb entry is passed, pre-fill
+  // strength / dosageForm / activeIngredients from it so the user doesn't
+  // re-type what we already know. The manual-add path keeps the existing
+  // behaviour (string-only call) and leaves those fields blank.
+  function startEnrich(prefillBrand = '', master?: MasterMedicine) {
     resetForm()
-    setFormBrand(prefillBrand)
+    if (master) {
+      setFormBrand(master.brandName ?? master.name)
+      if (master.strength) {
+        const parsed = parseStrengthString(master.strength)
+        if (parsed) {
+          setFormStrengthValue(parsed.value)
+          setFormStrengthUnit(parsed.unit)
+        } else {
+          // Unrecognized format (e.g. "500/125mg" combo) — drop into value
+          // verbatim and let the user clean it up.
+          setFormStrengthValue(master.strength)
+        }
+      }
+      if (master.dosageForm && ALLOWED_DOSAGE_FORMS.includes(master.dosageForm as DosageForm)) {
+        const form = master.dosageForm as DosageForm
+        setFormDosageForm(form)
+        const suggested = suggestUnitForForm(form)
+        if (suggested) setFormUnit(suggested)
+      }
+      if (master.activeIngredients) setFormActiveIngr(master.activeIngredients)
+    } else {
+      setFormBrand(prefillBrand)
+    }
     setView('enrich')
+  }
+
+  // Tries to split "500mg" → { value: "500", unit: "mg" }. Tolerates an
+  // optional space between number and unit ("60000 IU"). Returns null for
+  // anything outside the recognized unit set; caller falls back to dumping
+  // the whole string into the value input.
+  function parseStrengthString(s: string): { value: string; unit: StrengthUnit } | null {
+    const m = s.trim().match(/^(\d+(?:\.\d+)?)\s*(mg|mcg|g|ml|iu|%)$/i)
+    if (!m) return null
+    const value = m[1]
+    const unitRaw = m[2].toLowerCase()
+    const unit: StrengthUnit = unitRaw === 'iu' ? 'IU' : (unitRaw as StrengthUnit)
+    return { value, unit }
   }
 
   function continueToCabinet() {
     if (!formBrand.trim())    { setFormError('Brand name is required.');   return }
-    if (!formStrength.trim()) { setFormError('Strength is required.');     return }
+    // AK-39 / catalog-enrichment — strength is now optional. Inhalers,
+    // topicals, and some combo products legitimately have no single number.
     const qty = parseInt(formQuantity, 10)
     if (!formQuantity || isNaN(qty) || qty < 0) {
       setFormError('Enter a valid quantity.'); return
@@ -303,17 +394,28 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
     // new addition should be checked against.
     const otherItems = items
     const cabinetIdLocal = cId
+    // AK-39 / catalog-enrichment — combine value + unit, and resolve the
+    // 'other' sentinel to either the typed custom string or the literal
+    // 'other' when the user left the input blank.
+    const trimmedStrengthValue = formStrengthValue.trim()
+    const strengthCombined = trimmedStrengthValue
+      ? `${trimmedStrengthValue}${formStrengthUnit}`
+      : null
+    const resolvedUnit: CabinetItemUnit =
+      formUnit === 'other'
+        ? ((formCustomUnit.trim() || 'other') as CabinetItemUnit)
+        : formUnit
     try {
       const newIid = await addCabinetItem(hId, cId, {
         medicineId: formBrand.trim(),
         displayNameOverride: null,
         quantityOnHand: parseInt(formQuantity, 10),
-        unit: formUnit,
+        unit: resolvedUnit,
         expiryDate: formExpiry || null,
         prescribed: formPrescribed,
         brandName: formBrand.trim(),
         dosageForm: formDosageForm,
-        strength: formStrength.trim() || null,
+        strength: strengthCombined,
         activeIngredients: formActiveIngr.trim() || null,
         marketer: formMarketer.trim() || null,
         storageInstructions: formStorage.trim() || null,
@@ -335,12 +437,12 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
           medicineId: formBrand.trim(),
           displayNameOverride: null,
           quantityOnHand: parseInt(formQuantity, 10),
-          unit: formUnit,
+          unit: resolvedUnit,
           expiryDate: formExpiry || null,
           prescribed: formPrescribed,
           brandName: formBrand.trim(),
           dosageForm: formDosageForm,
-          strength: formStrength.trim() || null,
+          strength: strengthCombined,
           activeIngredients: formActiveIngr.trim() || null,
           marketer: formMarketer.trim() || null,
           storageInstructions: formStorage.trim() || null,
@@ -397,7 +499,7 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
               <li key={med.medicineId}>
                 <button
                   className="cb-result-btn"
-                  onClick={() => startEnrich(med.name)}
+                  onClick={() => startEnrich(med.name, med)}
                   role="option"
                 >
                   <span className="cb-result-name">{med.name}</span>
@@ -462,7 +564,16 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
                 id="cb-form"
                 className="cb-input cb-select"
                 value={formDosageForm}
-                onChange={e => setFormDosageForm(e.target.value as DosageForm)}
+                onChange={e => {
+                  const newForm = e.target.value as DosageForm
+                  setFormDosageForm(newForm)
+                  // AK-39 / catalog-enrichment — flip the count unit to the
+                  // sensible default for the new form (puff for inhaler, ml
+                  // for syrup, application for cream/ointment, etc.). User
+                  // can still override after.
+                  const suggested = suggestUnitForForm(newForm)
+                  if (suggested) setFormUnit(suggested)
+                }}
               >
                 {(Object.keys(DOSAGE_FORM_LABELS) as DosageForm[]).map(f => (
                   <option key={f} value={f}>{DOSAGE_FORM_LABELS[f]}</option>
@@ -470,15 +581,29 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
               </select>
             </div>
             <div className="cb-field">
-              <label className="cb-label" htmlFor="cb-strength">Strength</label>
-              <input
-                id="cb-strength"
-                className="cb-input"
-                type="text"
-                placeholder="500mg"
-                value={formStrength}
-                onChange={e => setFormStrength(e.target.value)}
-              />
+              <label className="cb-label" htmlFor="cb-strength-value">Strength</label>
+              <div className="cb-strength-row">
+                <input
+                  id="cb-strength-value"
+                  className="cb-input"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="e.g. 500"
+                  value={formStrengthValue}
+                  onChange={e => setFormStrengthValue(e.target.value)}
+                />
+                <select
+                  id="cb-strength-unit"
+                  className="cb-input cb-select"
+                  value={formStrengthUnit}
+                  onChange={e => setFormStrengthUnit(e.target.value as StrengthUnit)}
+                  aria-label="Strength unit"
+                >
+                  {STRENGTH_UNITS.map(u => (
+                    <option key={u} value={u}>{u}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -508,6 +633,18 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
                   <option key={u} value={u}>{UNIT_LABELS[u]}</option>
                 ))}
               </select>
+              {formUnit === 'other' && (
+                <input
+                  id="cb-unit-custom"
+                  className="cb-input"
+                  type="text"
+                  placeholder="Type a unit (e.g. vial, sachet)"
+                  value={formCustomUnit}
+                  onChange={e => setFormCustomUnit(e.target.value)}
+                  aria-label="Custom unit"
+                  style={{ marginTop: 6 }}
+                />
+              )}
             </div>
           </div>
 
