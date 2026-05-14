@@ -5178,6 +5178,46 @@
   text-align: center;
 }
 
+/* ─── AK-39 passive interaction badge ────────────────────────── */
+
+.cb-interaction-badge {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: rgba(239, 159, 39, 0.15);
+  color: #EF9F27;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.cb-interaction-badge:hover {
+  background: rgba(239, 159, 39, 0.22);
+}
+
+.cb-interaction-expanded {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(239, 159, 39, 0.1);
+  color: #106470;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.cb-interaction-description {
+  margin: 0;
+}
+
+.cb-interaction-with {
+  margin: 6px 0 0;
+  font-weight: 600;
+  color: #106470;
+}
+
 /* ─── AK-58 caregiver grants — admin issuance UI ─────────────── */
 
 /* Wraps each st-avatar-tile so the whole tile is a tap target without

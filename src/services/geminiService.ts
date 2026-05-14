@@ -21,6 +21,7 @@ import type {
   GeminiProxyRequest,
   GeminiProxyResponse,
 } from '../types/geminiProxy'
+import type { CabinetItem } from '../types'
 
 // Single shared callable handle. `functions` is already pinned to
 // asia-south1 by lib/firebase.ts, so the call lands at the proxy without
@@ -104,4 +105,110 @@ export async function checkDrugInteraction(
     ...(candidateMedicine ? { candidateMedicine } : {}),
   }
   return callProxy('checkDrugInteraction', req)
+}
+
+// AK-39 — Passive interaction check fired after a cabinet add succeeds.
+// Builds a CandidateMedicine payload from the freshly added item and passes
+// the iIds of everything else already in the cabinet as the comparison set.
+// The proxy is exempt from the daily rate limit for drug_interaction
+// (CLAUDE.md rule #6).
+//
+// Returns null on:
+//   • empty otherItems (nothing to interact with)
+//   • proxy refusal / error / rate_limited
+//   • prose answer that doesn't clearly assert an interaction
+//
+// Returns the structured warning when the model's answer mentions a known
+// interaction. Risk level is heuristically derived from the answer text —
+// the existing proxy returns prose, not a structured boolean, so this
+// parse-on-client step is a known v1 limitation.
+//
+// Callers should fire-and-forget; never await this for UI gating.
+export async function checkCabinetInteractions(
+  newItem: CabinetItem,
+  otherItems: CabinetItem[],
+): Promise<{
+  hasInteraction: boolean
+  riskLevel: 'moderate' | 'high'
+  withMedicineNames: string[]
+  description: string
+} | null> {
+  if (otherItems.length === 0) return null
+
+  const candidate = candidateMedicineFromItem(newItem)
+  const response = await checkDrugInteraction(
+    otherItems.map((it) => it.iId),
+    newItem.hId,
+    newItem.cId,
+    candidate,
+  )
+
+  if (response.kind !== 'answer') return null
+  return parseInteractionAnswer(response.text, response.medicinesReferenced, newItem)
+}
+
+function candidateMedicineFromItem(item: CabinetItem): CandidateMedicine {
+  const ai = (item.activeIngredients ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  const brandName =
+    item.displayNameOverride ?? item.brandName ?? item.medicineId
+  return {
+    medicineId: item.medicineId,
+    brandName,
+    ...(ai.length > 0 ? { activeIngredients: ai } : {}),
+    ...(item.dosageForm ? { dosageForm: item.dosageForm } : {}),
+    ...(item.strength ? { strength: item.strength } : {}),
+  }
+}
+
+// Heuristic parser. The proxy answers in prose; we look for explicit
+// no-interaction phrasing first (so neutral confirmations don't get flagged),
+// then for interaction signals. Returns null when the answer is unclear.
+const NO_INTERACTION_RE =
+  /\bno\b[^.]{0,40}(known\s+|significant\s+|adverse\s+)?interactions?\b/i
+const INTERACTION_RE =
+  /\b(interact|interaction|contraindicate|avoid\s+combin|increase[sd]?\s+(the\s+)?risk)\b/i
+const HIGH_RISK_RE =
+  /\b(serious|severe|significant|contraindicate|avoid\s+combin|never\s+take|life-threatening|fatal)\b/i
+
+function parseInteractionAnswer(
+  text: string,
+  medicinesReferenced: string[],
+  newItem: CabinetItem,
+): {
+  hasInteraction: boolean
+  riskLevel: 'moderate' | 'high'
+  withMedicineNames: string[]
+  description: string
+} | null {
+  if (!text) return null
+
+  if (NO_INTERACTION_RE.test(text)) return null
+  if (!INTERACTION_RE.test(text)) return null
+
+  const candidateName =
+    newItem.displayNameOverride ?? newItem.brandName ?? newItem.medicineId
+  const candidateLower = candidateName.toLowerCase()
+  const withMedicineNames = medicinesReferenced.filter(
+    (n) => n.toLowerCase() !== candidateLower,
+  )
+  if (withMedicineNames.length === 0) return null
+
+  const riskLevel: 'moderate' | 'high' = HIGH_RISK_RE.test(text)
+    ? 'high'
+    : 'moderate'
+
+  // First sentence as the one-line description, capped at 200 chars for
+  // safety against runaway model output.
+  const firstSentence = text.split(/(?<=[.!?])\s+/)[0]?.trim() ?? text.trim()
+  const description = firstSentence.slice(0, 200)
+
+  return {
+    hasInteraction: true,
+    riskLevel,
+    withMedicineNames,
+    description,
+  }
 }

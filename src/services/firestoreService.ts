@@ -164,6 +164,31 @@ export async function addCabinetItem(
   return iId
 }
 
+// AK-39 — Stamps the passive interaction warning on a cabinet item. Called
+// in the background after addCabinetItem, never inside a transaction. Pass
+// null to clear an existing warning. `checkedAt` is set server-side
+// (serverTimestamp) so the caller does not need to provide a Timestamp.
+//
+// Security: the cabinet-items rule only permits admins to write fields
+// outside the dose-debit whitelist. Since only admins can call
+// addCabinetItem in the first place, this update path is admin-only too.
+export async function updateCabinetItemInteractionWarning(
+  hId: string,
+  cId: string,
+  iId: string,
+  warning:
+    | Omit<NonNullable<CabinetItem['interactionWarning']>, 'checkedAt'>
+    | null,
+): Promise<void> {
+  await updateDoc(doc(db, itemPath(hId, cId, iId)), {
+    interactionWarning:
+      warning === null
+        ? null
+        : { ...warning, checkedAt: serverTimestamp() },
+    updatedAt: serverTimestamp(),
+  })
+}
+
 export function subscribeCabinetItems(
   hId: string,
   cId: string,

@@ -2,14 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ChevronDown, Pill } from 'lucide-react'
 import {
   getOrCreateDefaultCabinet,
-  getCabinetItems,
+  subscribeCabinetItems,
   addCabinetItem,
   searchMasterDb,
   loadAllActiveRegimens,
   subscribeRestockRequests,
   updateRestockRequest,
   getHouseholdMembers,
+  updateCabinetItemInteractionWarning,
 } from '../services/firestoreService'
+import { checkCabinetInteractions } from '../services/geminiService'
 import { todayISTString } from '../lib/paths'
 import type {
   CabinetItem,
@@ -94,6 +96,9 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   const [items, setItems] = useState<CabinetItem[]>([])
   const [loadingList, setLoadingList] = useState(true)
   const [listError, setListError] = useState('')
+  // AK-39 — Per-card expansion state for the interaction badge. Tracks which
+  // item's warning details are currently open; null when collapsed.
+  const [expandedInteractionIid, setExpandedInteractionIid] = useState<string | null>(null)
 
   // search
   const [searchQuery, setSearchQuery] = useState('')
@@ -187,24 +192,44 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
 
   useEffect(() => {
     let cancelled = false
-    async function load() {
+    let unsubscribe: (() => void) | null = null
+    async function setup() {
       setLoadingList(true)
       setListError('')
       try {
         const id = await getOrCreateDefaultCabinet(hId)
         if (cancelled) return
         setCId(id)
-        const data = await getCabinetItems(hId, id)
-        if (cancelled) return
-        setItems(data)
+        // AK-39 — Real-time subscription so the passive interaction warning
+        // (stamped by a background write after addCabinetItem resolves)
+        // surfaces on the list without a manual refetch.
+        unsubscribe = subscribeCabinetItems(
+          hId,
+          id,
+          (data) => {
+            if (cancelled) return
+            setItems(data)
+            setLoadingList(false)
+          },
+          () => {
+            if (!cancelled) {
+              setListError('Could not load cabinet. Check your connection.')
+              setLoadingList(false)
+            }
+          },
+        )
       } catch {
-        if (!cancelled) setListError('Could not load cabinet. Check your connection.')
-      } finally {
-        if (!cancelled) setLoadingList(false)
+        if (!cancelled) {
+          setListError('Could not load cabinet. Check your connection.')
+          setLoadingList(false)
+        }
       }
     }
-    load()
-    return () => { cancelled = true }
+    setup()
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+    }
   }, [hId])
 
   // debounced masterDb search
@@ -272,8 +297,14 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
     if (!cId) return
     setFormLoading(true)
     setFormError('')
+    // Snapshot the items currently in state as the comparison set for the
+    // interaction check. The subscription will fire shortly with the post-add
+    // set, but we want the pre-add view here — exactly the "other items" the
+    // new addition should be checked against.
+    const otherItems = items
+    const cabinetIdLocal = cId
     try {
-      await addCabinetItem(hId, cId, {
+      const newIid = await addCabinetItem(hId, cId, {
         medicineId: formBrand.trim(),
         displayNameOverride: null,
         quantityOnHand: parseInt(formQuantity, 10),
@@ -287,9 +318,47 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
         marketer: formMarketer.trim() || null,
         storageInstructions: formStorage.trim() || null,
       })
-      const updated = await getCabinetItems(hId, cId)
-      setItems(updated)
+      // The subscribeCabinetItems listener installed on mount will pick up the
+      // new doc and re-set items state automatically — no manual refetch.
       cancelToList()
+
+      // AK-39 — Fire-and-forget passive interaction check. Never awaited, never
+      // surfaces errors to the user; informational badge only. The newItem
+      // object is built locally from form data + the returned iId; only the
+      // fields checkCabinetInteractions reads are needed, so a cast covers
+      // the (server-stamped) timestamp fields that aren't available client-side.
+      if (otherItems.length > 0) {
+        const newItem = {
+          iId: newIid,
+          cId: cabinetIdLocal,
+          hId,
+          medicineId: formBrand.trim(),
+          displayNameOverride: null,
+          quantityOnHand: parseInt(formQuantity, 10),
+          unit: formUnit,
+          expiryDate: formExpiry || null,
+          prescribed: formPrescribed,
+          brandName: formBrand.trim(),
+          dosageForm: formDosageForm,
+          strength: formStrength.trim() || null,
+          activeIngredients: formActiveIngr.trim() || null,
+          marketer: formMarketer.trim() || null,
+          storageInstructions: formStorage.trim() || null,
+        } as CabinetItem
+        checkCabinetInteractions(newItem, otherItems)
+          .then((result) => {
+            if (result?.hasInteraction) {
+              return updateCabinetItemInteractionWarning(hId, cabinetIdLocal, newIid, {
+                withMedicineNames: result.withMedicineNames,
+                riskLevel: result.riskLevel,
+                description: result.description,
+              })
+            }
+          })
+          .catch(() => {
+            // Silent — passive background check, never blocks or surfaces.
+          })
+      }
     } catch {
       setFormError('Failed to save. Please try again.')
     } finally {
@@ -742,6 +811,40 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
             <span className={expBadge.cls} style={{ alignSelf: 'flex-start', marginTop: 4 }}>
               {expBadge.label}
             </span>
+          )}
+          {item.interactionWarning && (
+            <>
+              <button
+                type="button"
+                className="cb-interaction-badge"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setExpandedInteractionIid((prev) =>
+                    prev === item.iId ? null : item.iId,
+                  )
+                }}
+                aria-expanded={expandedInteractionIid === item.iId}
+              >
+                ⚠ Interaction risk
+              </button>
+              {expandedInteractionIid === item.iId && (
+                <div
+                  className="cb-interaction-expanded"
+                  onClick={(e) => e.stopPropagation()}
+                  role="region"
+                  aria-label="Interaction details"
+                >
+                  <p className="cb-interaction-description">
+                    {item.interactionWarning.description}
+                  </p>
+                  {item.interactionWarning.withMedicineNames.length > 0 && (
+                    <p className="cb-interaction-with">
+                      With: {item.interactionWarning.withMedicineNames.join(', ')}
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </li>
       )

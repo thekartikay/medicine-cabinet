@@ -117,6 +117,17 @@ export interface CabinetItem {
   storageInstructions?: string | null
   createdAt: Timestamp
   updatedAt: Timestamp
+  // AK-39 — Passive interaction tag. Stamped by a background check after the
+  // item is added: geminiProxy ran a drug_interaction query against the rest
+  // of the cabinet, and the model surfaced a known interaction. Null/absent
+  // means either "no interaction found" or "no check ran yet". Informational
+  // only — never blocks the user.
+  interactionWarning?: {
+    withMedicineNames: string[]
+    riskLevel: 'moderate' | 'high'
+    description: string
+    checkedAt: Timestamp
+  } | null
 }
 
 export interface MasterMedicine {
