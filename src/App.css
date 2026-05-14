@@ -371,6 +371,13 @@
   padding: 4px 8px;
 }
 
+.si-caregiver-hint {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: center;
+  margin: 1rem 0 0 0;
+}
+
 /* ── AK-112: OTP polish — resend timer, help expander, lockout banner ── */
 
 .si-mono {

@@ -215,6 +215,10 @@ export function SignIn() {
               <span className="si-pill-label">Continue with phone</span>
               <span className="si-pill-chevron" aria-hidden="true">›</span>
             </button>
+
+            <p className="si-caregiver-hint">
+              Joining as a caregiver? Open your invite link from WhatsApp or email.
+            </p>
           </>
         )}
 
