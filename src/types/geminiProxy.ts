@@ -62,6 +62,13 @@ export interface AnswerResponse {
   medicinesReferenced: string[]
   // Populated only for drug_interaction responses; undefined for cabinet_query.
   sources?: string[]
+  // AK-39 — Structured interaction signal from the model. Drug-interaction
+  // success responses set this; cabinet_query leaves it undefined. Treated
+  // as "no interaction confirmed" when absent, so consumers default-safe.
+  interactionFlag?: {
+    hasInteraction: boolean
+    riskLevel: 'moderate' | 'high' | null
+  } | null
 }
 
 export interface RefusalResponse {
