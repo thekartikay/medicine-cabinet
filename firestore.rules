@@ -139,9 +139,12 @@ service cloud.firestore {
     }
 
     // ─── /users/{uid} ─────────────────────────────────────────────────────
-    // Read/create your own profile. Updates are restricted to four
-    // self-service fields so users cannot grant themselves a role or move
-    // themselves between households via direct writes.
+    // Read/create your own profile. Updates are restricted to an explicit
+    // whitelist of self-service fields so users cannot grant themselves a
+    // role or move themselves between households via direct writes —
+    // householdId stays Cloud-Function-only (createHousehold/joinHousehold).
+    // displayName/email/phone/updatedAt are editable by the user themselves
+    // (AK-117 ProfileSetup + future profile-edit UI).
     match /users/{uid} {
       allow read:   if isSelf(uid);
       allow create: if isSelf(uid);
@@ -152,7 +155,11 @@ service cloud.firestore {
                                     'whatsappSnoozeUntil',
                                     'pushNotificationsEnabled',
                                     'whatsappRemindersEnabled',
-                                    'reminderMethod']);
+                                    'reminderMethod',
+                                    'displayName',
+                                    'email',
+                                    'phone',
+                                    'updatedAt']);
       allow delete: if false;
     }
 
