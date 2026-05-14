@@ -345,7 +345,7 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
           marketer: formMarketer.trim() || null,
           storageInstructions: formStorage.trim() || null,
         } as CabinetItem
-        checkCabinetInteractions(newItem, otherItems)
+        checkCabinetInteractions(newItem, otherItems.map((it) => it.iId))
           .then((result) => {
             if (result?.hasInteraction) {
               return updateCabinetItemInteractionWarning(hId, cabinetIdLocal, newIid, {

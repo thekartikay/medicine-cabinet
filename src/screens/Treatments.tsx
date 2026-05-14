@@ -17,7 +17,10 @@ import {
   pauseTreatment,
   resumeTreatment,
   endTreatment,
+  getActiveTreatmentMedicines,
 } from '../services/firestoreService'
+import { checkCabinetInteractions } from '../services/geminiService'
+import { InteractionWarningModal } from '../components/InteractionWarningModal'
 import type {
   CabinetItem,
   CabinetItemUnit,
@@ -128,6 +131,13 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   const [stepError, setStepError] = useState('')
   const [saveLoading, setSaveLoading] = useState(false)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  // AK-39 sub-task 2 — Interaction check gate at step2 → step3 transition.
+  const [checkingInteraction, setCheckingInteraction] = useState(false)
+  const [pendingInteractionWarning, setPendingInteractionWarning] = useState<{
+    description: string
+    withMedicineNames: string[]
+    riskLevel: 'moderate' | 'high'
+  } | null>(null)
 
   // ── Per-treatment regimens (used for OOS detection in the list view) ──
   // Loaded alongside adherence so a single Firestore round-trip serves both.
@@ -303,13 +313,52 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     return ''
   }
 
-  function goNext() {
+  async function goNext() {
     const err = validate(view)
     if (err) { setStepError(err); return }
     setStepError('')
     const next: Record<TxView, TxView> = {
       list: 'step1', step1: 'step2', step2: 'step3', step3: 'step4', step4: 'step4',
     }
+
+    // AK-39 sub-task 2 — Soft interaction check at the step2 → step3 boundary
+    // only. The medicine is chosen on step2; the check compares it against the
+    // member's other active-treatment regimens. Any error (no other meds, no
+    // interaction, Gemini failure, no cabinet match) advances normally; only a
+    // positive hit opens the confirm modal and pauses the transition.
+    if (view === 'step2') {
+      const selectedItem = cabinetItems.find(i => i.iId === formCabinetItemId)
+      if (!selectedItem) { setView(next[view]); return }
+      setCheckingInteraction(true)
+      try {
+        const otherMedicines = await getActiveTreatmentMedicines(hId, formMemberId)
+        if (otherMedicines.length === 0) {
+          setView(next[view])
+          return
+        }
+        const result = await checkCabinetInteractions(
+          selectedItem,
+          otherMedicines.map(m => m.cabinetItemId),
+        )
+        if (result?.hasInteraction) {
+          setPendingInteractionWarning({
+            description: result.description,
+            withMedicineNames: result.withMedicineNames,
+            riskLevel: result.riskLevel,
+          })
+          // Stay on step2; modal drives the next action.
+          return
+        }
+        setView(next[view])
+      } catch {
+        // Silent fail — the check is informational, not load-bearing.
+        setView(next[view])
+      } finally {
+        setCheckingInteraction(false)
+      }
+      return
+    }
+
     setView(next[view])
   }
 
@@ -1254,10 +1303,26 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
       {view !== 'step4' && (
         <>
           {stepError && <p className="cb-form-error" role="alert">{stepError}</p>}
-          <button className="cb-submit-btn" onClick={goNext} style={{ marginTop: 8 }}>
-            Next
+          <button
+            className="cb-submit-btn"
+            onClick={goNext}
+            style={{ marginTop: 8 }}
+            disabled={checkingInteraction}
+          >
+            {checkingInteraction ? 'Checking…' : 'Next'}
           </button>
         </>
+      )}
+
+      {pendingInteractionWarning && (
+        <InteractionWarningModal
+          warning={pendingInteractionWarning}
+          onProceed={() => {
+            setPendingInteractionWarning(null)
+            setView('step3')
+          }}
+          onGoBack={() => setPendingInteractionWarning(null)}
+        />
       )}
 
       {/* Cancel-wizard confirmation modal (Fix 4) */}
