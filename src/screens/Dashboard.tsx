@@ -4,7 +4,7 @@ import type { User } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import {
   Home, Pill, HeartPulse, Settings as SettingsIcon,
-  Check, Clock, X, Minus, Bell, ChevronDown,
+  Check, Clock, X, Minus, Bell, ChevronDown, BriefcaseMedical,
 } from 'lucide-react'
 import { auth, functions } from '../lib/firebase'
 import { todayISTString, getDefaultCabinetId } from '../lib/paths'
@@ -703,7 +703,9 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
               )}
               {todaysDoses.length === 0 ? (
                 <div className="db-card db-empty-state">
-                  <span className="db-empty-icon" aria-hidden="true">💊</span>
+                  <div className="empty-state-icon">
+                    <Pill size={28} color="#5DC1C8" />
+                  </div>
                   <p className="db-empty-text">No treatments set up yet</p>
                   <p className="db-empty-sub">Add a treatment to start tracking doses</p>
                 </div>
@@ -954,7 +956,9 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
 
               {stockItems.length === 0 ? (
                 <div className="db-card db-empty-state">
-                  <span className="db-empty-icon" aria-hidden="true">🗄️</span>
+                  <div className="empty-state-icon">
+                    <BriefcaseMedical size={28} color="#5DC1C8" />
+                  </div>
                   <p className="db-empty-text">Your cabinet is empty</p>
                   <p className="db-empty-sub">Add medicines to track your stock</p>
                 </div>

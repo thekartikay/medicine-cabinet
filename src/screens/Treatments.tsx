@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ChevronLeft, Plus, X, Clock, AlertTriangle,
-  Pause, Play, StopCircle, Trash2, ChevronDown,
+  Pause, Play, StopCircle, Trash2, ChevronDown, CalendarHeart,
 } from 'lucide-react'
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../lib/firebase'
@@ -599,7 +599,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
 
         {!loadingList && visibleTreatments.length === 0 && (
           <div className="db-card db-empty-state">
-            <span className="db-empty-icon" aria-hidden="true">💊</span>
+            <div className="empty-state-icon">
+              <CalendarHeart size={28} color="#5DC1C8" />
+            </div>
             <p className="db-empty-text">No treatments yet</p>
             {!readOnly && <p className="db-empty-sub">Add one to start tracking doses.</p>}
           </div>

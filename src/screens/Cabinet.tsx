@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ChevronDown } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Pill } from 'lucide-react'
 import {
   getOrCreateDefaultCabinet,
   getCabinetItems,
@@ -873,7 +873,9 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
 
       {!loadingList && !listError && allGroups.length === 0 && (
         <div className="db-card db-empty-state">
-          <span className="db-empty-icon" aria-hidden="true">💊</span>
+          <div className="empty-state-icon">
+            <Pill size={28} color="#5DC1C8" />
+          </div>
           <p className="db-empty-text">
             {readOnly ? 'No medicines linked to your treatments yet' : 'No medicines yet'}
           </p>
