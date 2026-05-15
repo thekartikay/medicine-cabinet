@@ -102,6 +102,18 @@ function tomorrowISTString(today: string): string {
   }).format(d)
 }
 
+// AK-122 — Smart defaults for time-driven dose slots. Ordered by typical
+// real-world cadence (morning → midday → evening → early morning). The form
+// caps the slot count at 4 and walks this list when adding new slots so the
+// default value never collides with an existing one.
+const SLOT_DEFAULTS = ['08:00', '13:00', '20:00', '06:00']
+const MAX_SLOTS_PER_DAY = 4
+
+function nextSlotDefault(existingSlots: TimeSlot[]): string | null {
+  const usedTimes = new Set(existingSlots.map(s => s.time))
+  return SLOT_DEFAULTS.find(t => !usedTimes.has(t)) ?? null
+}
+
 function summarize(scheduleType: ScheduleType, days: number[], slots: TimeSlot[]): string {
   if (scheduleType === 'as-needed') return 'As needed'
   const times = slots.map(s => s.time).join(', ')
@@ -142,6 +154,10 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   const [formScheduleType, setFormScheduleType] = useState<ScheduleType>('daily')
   const [formScheduleDays, setFormScheduleDays] = useState<number[]>([1, 2, 3, 4, 5])
   const [formSlots, setFormSlots] = useState<TimeSlot[]>([{ time: '08:00', foodTiming: 'after' }])
+  // AK-122 — Per-slot inline error messages, keyed by slot index. Populated
+  // when the user edits a slot to match another slot's time; cleared when
+  // the conflict is resolved, when the slot is removed, or on step-3 advance.
+  const [slotErrors, setSlotErrors] = useState<Record<number, string>>({})
   const [formStartDate, setFormStartDate] = useState(todayISTString())
   const [formEndDate, setFormEndDate] = useState('')
   const [formOngoing, setFormOngoing] = useState(true)
@@ -351,6 +367,7 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setFormOngoing(true)
     setFormMaxDosesPerDay(4)
     setStockInsufficientForRestock(false)
+    setSlotErrors({})
     setStepError('')
     setView('step1')
   }
@@ -371,6 +388,14 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         return 'Select at least one day.'
       if (formScheduleType !== 'as-needed' && formSlots.length === 0)
         return 'Add at least one dose time.'
+      // AK-122 — safety net for slots that drift into a duplicate time via
+      // direct time-input edits after the addSlot guard.
+      if (formScheduleType !== 'as-needed') {
+        const slotTimes = formSlots.map(s => s.time)
+        if (new Set(slotTimes).size !== slotTimes.length) {
+          return 'Each dose time must be unique.'
+        }
+      }
       if (!formOngoing && !formEndDate)
         return 'Set an end date or choose ongoing.'
     }
@@ -381,6 +406,11 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     const err = validate(view)
     if (err) { setStepError(err); return }
     setStepError('')
+    if (view === 'step3') {
+      // AK-122 — validate('step3') confirmed there are no duplicates; clear
+      // any per-slot errors that may have lingered from prior edits.
+      setSlotErrors({})
+    }
     const next: Record<TxView, TxView> = {
       list: 'step1', step1: 'step2', step2: 'step3', step3: 'step4', step4: 'step4',
     }
@@ -474,6 +504,7 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setFormOngoing(true)
     setFormMaxDosesPerDay(4)
     setStockInsufficientForRestock(false)
+    setSlotErrors({})
     setStepError('')
     setView('list')
   }
@@ -513,14 +544,52 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     }
   }
 
-  // Slot helpers
+  // Slot helpers — AK-122 smart defaults + duplicate guards.
   function addSlot() {
-    setFormSlots(prev => [...prev, { time: '08:00', foodTiming: 'after' }])
+    // Hard cap on slot count. The button below is also disabled past 4, but
+    // we re-check here as a defense-in-depth: keyboard users can press the
+    // button before disabled state updates, and the cap is a real product
+    // constraint (not just a UI affordance).
+    if (formSlots.length >= MAX_SLOTS_PER_DAY) {
+      setStepError(`Maximum of ${MAX_SLOTS_PER_DAY} dose times allowed per day.`)
+      return
+    }
+    const newSlotTime = nextSlotDefault(formSlots)
+    if (newSlotTime === null) {
+      // All defaults are taken (e.g. the user manually edited slots to
+      // cover every default). Fall back to the cap message — they can
+      // remove or edit an existing slot if they really need a 5th time,
+      // though the count cap above will also block that.
+      setStepError(`Maximum of ${MAX_SLOTS_PER_DAY} dose times allowed per day.`)
+      return
+    }
+    setStepError('')
+    setFormSlots(prev => [...prev, { time: newSlotTime, foodTiming: 'after' }])
   }
+
   function removeSlot(i: number) {
     setFormSlots(prev => prev.filter((_, idx) => idx !== i))
+    // Indices shift after a removal, so any prior per-slot errors are now
+    // off-by-one. Cheapest correct path: wipe the error map; users will
+    // re-trigger detection on their next edit.
+    setSlotErrors({})
   }
+
   function setSlotTime(i: number, time: string) {
+    const duplicate = formSlots.some((s, idx) => idx !== i && s.time === time)
+    if (duplicate) {
+      // Don't apply the duplicate value. The controlled input snaps back
+      // to the prior valid time on the next render, and the inline error
+      // explains why.
+      setSlotErrors(prev => ({ ...prev, [i]: 'This time is already used.' }))
+      return
+    }
+    setSlotErrors(prev => {
+      if (!(i in prev)) return prev
+      const next = { ...prev }
+      delete next[i]
+      return next
+    })
     setFormSlots(prev => prev.map((s, idx) => idx === i ? { ...s, time } : s))
   }
   function setSlotFood(i: number, food: FoodTiming) {
@@ -1146,29 +1215,49 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         <div className="cb-form">
           <div className="cb-field">
             <label className="cb-label" htmlFor="tr-medicine">Select from cabinet</label>
-            {cabinetError ? (
-              <p className="cb-hint cb-hint--error" role="alert">{cabinetError}</p>
-            ) : cabinetItems.length === 0 ? (
-              <p className="cb-hint">Your cabinet is empty. Add medicines in the Cabinet tab first.</p>
-            ) : (
-              <select
-                id="tr-medicine"
-                className="cb-input cb-select"
-                value={formCabinetItemId}
-                onChange={e => selectCabinetItem(e.target.value)}
-              >
-                <option value="">— Choose a medicine —</option>
-                {cabinetItems.map(item => {
-                  const name = item.displayNameOverride ?? item.medicineId
-                  const unit = item.unit === 'ml' ? 'ml' : `${item.unit}s`
-                  return (
-                    <option key={item.iId} value={item.iId}>
-                      {name} ({item.quantityOnHand} {unit})
-                    </option>
-                  )
-                })}
-              </select>
-            )}
+            {(() => {
+              // AK-120 — filter expired items out of the picker. YYYY-MM-DD
+              // strings compare lexicographically, so a string >= comparison
+              // gives the same answer as Date >= Date without allocating Dates.
+              // Items with no expiryDate stay (long-shelf-life staples or
+              // user-omitted dates).
+              const todayIST = todayISTString()
+              const availableItems = cabinetItems.filter(
+                item => !item.expiryDate || item.expiryDate >= todayIST,
+              )
+              if (cabinetError) {
+                return <p className="cb-hint cb-hint--error" role="alert">{cabinetError}</p>
+              }
+              if (cabinetItems.length === 0) {
+                return <p className="cb-hint">Your cabinet is empty. Add medicines in the Cabinet tab first.</p>
+              }
+              if (availableItems.length === 0) {
+                return (
+                  <p className="cb-hint cb-hint--error" role="alert">
+                    All your medicines have expired. Please update your cabinet before creating a treatment.
+                  </p>
+                )
+              }
+              return (
+                <select
+                  id="tr-medicine"
+                  className="cb-input cb-select"
+                  value={formCabinetItemId}
+                  onChange={e => selectCabinetItem(e.target.value)}
+                >
+                  <option value="">— Choose a medicine —</option>
+                  {availableItems.map(item => {
+                    const name = item.displayNameOverride ?? item.medicineId
+                    const unit = item.unit === 'ml' ? 'ml' : `${item.unit}s`
+                    return (
+                      <option key={item.iId} value={item.iId}>
+                        {name} ({item.quantityOnHand} {unit})
+                      </option>
+                    )
+                  })}
+                </select>
+              )
+            })()}
           </div>
 
           <div className="cb-field-row">
@@ -1288,37 +1377,56 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
               <span className="cb-label">Dose times</span>
               <div className="tr-slot-list">
                 {formSlots.map((slot, i) => (
-                  <div key={i} className="tr-slot-row">
-                    <input
-                      type="time"
-                      className="cb-input tr-slot-time"
-                      value={slot.time}
-                      onChange={e => setSlotTime(i, e.target.value)}
-                    />
-                    <select
-                      className="cb-input cb-select tr-slot-food"
-                      value={slot.foodTiming}
-                      onChange={e => setSlotFood(i, e.target.value as FoodTiming)}
-                    >
-                      <option value="before">Before food</option>
-                      <option value="after">After food</option>
-                      <option value="with">With food</option>
-                    </select>
-                    {formSlots.length > 1 && (
-                      <button
-                        type="button"
-                        className="tr-slot-remove"
-                        onClick={() => removeSlot(i)}
-                        aria-label="Remove time"
+                  <div key={i}>
+                    <div className="tr-slot-row">
+                      <input
+                        type="time"
+                        className="cb-input tr-slot-time"
+                        value={slot.time}
+                        onChange={e => setSlotTime(i, e.target.value)}
+                        aria-invalid={slotErrors[i] !== undefined}
+                      />
+                      <select
+                        className="cb-input cb-select tr-slot-food"
+                        value={slot.foodTiming}
+                        onChange={e => setSlotFood(i, e.target.value as FoodTiming)}
                       >
-                        <X size={16} />
-                      </button>
+                        <option value="before">Before food</option>
+                        <option value="after">After food</option>
+                        <option value="with">With food</option>
+                      </select>
+                      {formSlots.length > 1 && (
+                        <button
+                          type="button"
+                          className="tr-slot-remove"
+                          onClick={() => removeSlot(i)}
+                          aria-label="Remove time"
+                        >
+                          <X size={16} />
+                        </button>
+                      )}
+                    </div>
+                    {slotErrors[i] && (
+                      <p
+                        className="cb-hint cb-hint--error"
+                        role="alert"
+                        style={{ marginTop: 4 }}
+                      >
+                        {slotErrors[i]}
+                      </p>
                     )}
                   </div>
                 ))}
               </div>
-              <button type="button" className="cb-link-btn" onClick={addSlot} style={{ marginTop: 8 }}>
-                + Add another time
+              <button
+                type="button"
+                className="cb-link-btn"
+                onClick={addSlot}
+                style={{ marginTop: 8 }}
+                disabled={formSlots.length >= MAX_SLOTS_PER_DAY}
+                title={formSlots.length >= MAX_SLOTS_PER_DAY ? 'Maximum 4 doses per day.' : undefined}
+              >
+                {formSlots.length >= MAX_SLOTS_PER_DAY ? 'Maximum 4 doses per day' : '+ Add another time'}
               </button>
             </div>
           )}
