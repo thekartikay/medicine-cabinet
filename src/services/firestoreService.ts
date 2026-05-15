@@ -2,6 +2,7 @@ import {
   addDoc,
   collection,
   doc,
+  deleteDoc,
   getDoc,
   getDocs,
   onSnapshot,
@@ -187,6 +188,23 @@ export async function updateCabinetItemInteractionWarning(
         : { ...warning, checkedAt: serverTimestamp() },
     updatedAt: serverTimestamp(),
   })
+}
+
+// AK-124 — Hard-delete a cabinet item. Used by the treatment-interaction
+// warning modal's "Remove from cabinet" action to undo a just-added item
+// that conflicts with a household member's active treatment. Admin-only at
+// the rules layer (allow delete: if isAdmin(hId)).
+//
+// Note: existing dose logs that reference this iId stay in place — the dose
+// log is its own historical record and isn't garbage-collected when the
+// cabinet item it points at goes away. The audit reconciliation view (when
+// that ships) needs to tolerate dangling cabinetItemId references.
+export async function deleteCabinetItem(
+  hId: string,
+  cId: string,
+  iId: string,
+): Promise<void> {
+  await deleteDoc(doc(db, itemPath(hId, cId, iId)))
 }
 
 export function subscribeCabinetItems(

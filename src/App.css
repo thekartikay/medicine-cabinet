@@ -244,6 +244,109 @@
 .iw-button--secondary:hover { background-color: rgba(16, 100, 112, 0.06); }
 .iw-button--secondary:active { background-color: rgba(16, 100, 112, 0.12); }
 
+/* ── TreatmentInteractionWarningModal (tiw- prefix, AK-124) ───── */
+/* Cabinet-add → active-treatment-interaction warning. Same shape as
+   .iw-*; carries an extra advisory paragraph below the "Interacts with"
+   line and an outlined "Remove from cabinet" secondary button. */
+
+.tiw-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 300;
+}
+
+.tiw-card {
+  background: #ffffff;
+  border-radius: 24px;
+  max-width: 24rem;
+  width: 100%;
+  padding: 1.5rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+  text-align: center;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tiw-icon-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #EF9F27;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.tiw-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #106470;
+  margin: 0;
+}
+
+.tiw-description {
+  font-size: 0.95rem;
+  color: #444;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.tiw-with {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #106470;
+  margin: 0;
+}
+
+/* Static advisory copy. Slightly muted vs the description so the
+   description carries the primary read. */
+.tiw-advisory {
+  font-size: 0.85rem;
+  color: #666;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.tiw-button {
+  width: 100%;
+  padding: 0.875rem 1.25rem;
+  border-radius: 9999px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s, background 0.2s;
+}
+
+.tiw-button--primary {
+  background-color: #5DC1C8;
+  color: #ffffff;
+  border: none;
+  margin-top: 0.5rem;
+}
+
+.tiw-button--primary:hover { opacity: 0.9; }
+.tiw-button--primary:active { opacity: 0.8; }
+
+.tiw-button--secondary {
+  background-color: transparent;
+  color: #106470;
+  border: 1.5px solid #106470;
+}
+
+.tiw-button--secondary:hover { background-color: rgba(16, 100, 112, 0.06); }
+.tiw-button--secondary:active { background-color: rgba(16, 100, 112, 0.12); }
+
 /* ── TreatmentConflictModal (tcm- prefix, AK-123) ─────────────── */
 /* Same card / overlay shape as .ae-* and .iw-*; varies the icon
    colour (red for hard block, amber for soft warn) and offers either a

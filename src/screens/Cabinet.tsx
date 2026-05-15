@@ -10,8 +10,11 @@ import {
   updateRestockRequest,
   getHouseholdMembers,
   updateCabinetItemInteractionWarning,
+  getActiveTreatmentsWithRegimensForMember,
+  deleteCabinetItem,
 } from '../services/firestoreService'
 import { checkCabinetInteractions } from '../services/geminiService'
+import { TreatmentInteractionWarningModal } from '../components/TreatmentInteractionWarningModal'
 import { todayISTString } from '../lib/paths'
 import type {
   CabinetItem,
@@ -142,6 +145,17 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   // AK-39 — Per-card expansion state for the interaction badge. Tracks which
   // item's warning details are currently open; null when collapsed.
   const [expandedInteractionIid, setExpandedInteractionIid] = useState<string | null>(null)
+  // AK-124 — Surfaces when a newly-added cabinet item interacts with a
+  // medicine on someone's active treatment. Carries the cabinet identifiers
+  // alongside the warning copy so the modal's "Remove from cabinet" button
+  // can reach the doc without re-deriving it from a stale ref.
+  const [treatmentInteractionWarning, setTreatmentInteractionWarning] = useState<{
+    description: string
+    withMedicineNames: string[]
+    riskLevel: 'moderate' | 'high'
+    iId: string
+    cabinetId: string
+  } | null>(null)
 
   // search
   const [searchQuery, setSearchQuery] = useState('')
@@ -424,29 +438,32 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
       // new doc and re-set items state automatically — no manual refetch.
       cancelToList()
 
-      // AK-39 — Fire-and-forget passive interaction check. Never awaited, never
-      // surfaces errors to the user; informational badge only. The newItem
-      // object is built locally from form data + the returned iId; only the
-      // fields checkCabinetInteractions reads are needed, so a cast covers
-      // the (server-stamped) timestamp fields that aren't available client-side.
+      // AK-39 + AK-124 — Two independent fire-and-forget interaction checks
+      // run after a successful add. newItem is built once for both calls
+      // (only the fields checkCabinetInteractions reads are needed, so a
+      // cast covers the server-stamped timestamp fields).
+      const newItem = {
+        iId: newIid,
+        cId: cabinetIdLocal,
+        hId,
+        medicineId: formBrand.trim(),
+        displayNameOverride: null,
+        quantityOnHand: parseInt(formQuantity, 10),
+        unit: resolvedUnit,
+        expiryDate: formExpiry || null,
+        prescribed: formPrescribed,
+        brandName: formBrand.trim(),
+        dosageForm: formDosageForm,
+        strength: strengthCombined,
+        activeIngredients: formActiveIngr.trim() || null,
+        marketer: formMarketer.trim() || null,
+        storageInstructions: formStorage.trim() || null,
+      } as CabinetItem
+
+      // AK-39 — Passive check against other items already in the cabinet.
+      // Writes the warning back onto the new item's doc so its card shows
+      // the amber "Interaction risk" badge.
       if (otherItems.length > 0) {
-        const newItem = {
-          iId: newIid,
-          cId: cabinetIdLocal,
-          hId,
-          medicineId: formBrand.trim(),
-          displayNameOverride: null,
-          quantityOnHand: parseInt(formQuantity, 10),
-          unit: resolvedUnit,
-          expiryDate: formExpiry || null,
-          prescribed: formPrescribed,
-          brandName: formBrand.trim(),
-          dosageForm: formDosageForm,
-          strength: strengthCombined,
-          activeIngredients: formActiveIngr.trim() || null,
-          marketer: formMarketer.trim() || null,
-          storageInstructions: formStorage.trim() || null,
-        } as CabinetItem
         checkCabinetInteractions(newItem, otherItems.map((it) => it.iId))
           .then((result) => {
             if (result?.hasInteraction) {
@@ -459,6 +476,40 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
           })
           .catch(() => {
             // Silent — passive background check, never blocks or surfaces.
+          })
+      }
+
+      // AK-124 — Active-treatment check. Pulls every active regimen across
+      // every household member, collects their cabinetItemIds, and runs the
+      // same interaction check against that pool. A hit opens a modal
+      // (more prominent than the passive badge) with an undo path. The
+      // member-uid iteration source is the existing memberNameById map —
+      // populated by getHouseholdMembers on Cabinet mount.
+      const memberUids = Object.keys(memberNameById)
+      if (memberUids.length > 0) {
+        Promise.all(
+          memberUids.map((uid) => getActiveTreatmentsWithRegimensForMember(hId, uid)),
+        )
+          .then((results) => {
+            const treatmentItemIds = results
+              .flat()
+              .flatMap(({ regimens }) => regimens.map((r) => r.cabinetItemId))
+              .filter((id) => id && id !== newIid)
+            if (treatmentItemIds.length === 0) return null
+            return checkCabinetInteractions(newItem, treatmentItemIds)
+          })
+          .then((result) => {
+            if (!result?.hasInteraction) return
+            setTreatmentInteractionWarning({
+              description: result.description,
+              withMedicineNames: result.withMedicineNames,
+              riskLevel: result.riskLevel,
+              iId: newIid,
+              cabinetId: cabinetIdLocal,
+            })
+          })
+          .catch(() => {
+            // Silent — informational warning, never blocks the add.
           })
       }
     } catch {
@@ -1138,6 +1189,22 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
       )}
 
       {renderDetailSheet()}
+
+      {treatmentInteractionWarning && (
+        <TreatmentInteractionWarningModal
+          warning={treatmentInteractionWarning}
+          onDismiss={() => setTreatmentInteractionWarning(null)}
+          onRemove={() => {
+            const { iId, cabinetId } = treatmentInteractionWarning
+            // Close the modal first; the delete is async and fire-and-forget
+            // (the subscribeCabinetItems listener will remove the item from
+            // state as soon as Firestore processes the delete). Errors are
+            // swallowed — the admin can re-attempt via the cabinet card.
+            setTreatmentInteractionWarning(null)
+            void deleteCabinetItem(hId, cabinetId, iId).catch(() => {})
+          }}
+        />
+      )}
     </div>
   )
 }
