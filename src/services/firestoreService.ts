@@ -953,6 +953,75 @@ export async function getActiveTreatmentsWithRegimensForMember(
   }
 }
 
+// AK-121 — Bulk-write retroactive dose logs when the admin chooses to log
+// past doses on a treatment whose start date is in the past. Each log is a
+// real DoseLog (full required-field shape) so downstream consumers
+// (Dashboard, DoseHistory, audit reconciliation) treat them like any
+// historical log. inventoryDebited is forced false — retro flows can't know
+// what stock was consumed at the historical time, so cabinet inventory is
+// not adjusted. Written via writeBatch for atomicity + a single round-trip.
+//
+// Caller is responsible for generating slot IDs (via buildSlotId) and
+// deciding taken vs skipped per slot. retroactive=true is stamped on every
+// row so consumers can render "Logged retroactively" hints.
+export async function logRetroactiveDoses(
+  hId: string,
+  tId: string,
+  args: {
+    rId: string
+    patientId: string
+    cabinetItemId: string
+    doseAmount: number
+    doseUnit: string
+    createdBy: string
+    slots: Array<{
+      slotId: string
+      scheduledDate: string  // YYYY-MM-DD
+      scheduledTime: string  // HH:MM
+      status: 'taken' | 'skipped'
+    }>
+  },
+): Promise<void> {
+  if (args.slots.length === 0) return
+  const batch = writeBatch(db)
+  for (const s of args.slots) {
+    const ref = doc(db, dosePath(hId, tId, s.slotId))
+    // IST-anchored scheduledAt so the historical instant is unambiguous
+    // regardless of the writer's wall clock TZ. Matches logDose's pattern.
+    const scheduledAt = Timestamp.fromDate(
+      new Date(`${s.scheduledDate}T${s.scheduledTime}:00+05:30`),
+    )
+    batch.set(ref, {
+      slotId: s.slotId,
+      tId,
+      rId: args.rId,
+      hId,
+      patientId: args.patientId,
+      scheduledAt,
+      scheduledDate: s.scheduledDate,
+      scheduledTime: s.scheduledTime,
+      status: s.status,
+      // takenAt is the "when we marked it" timestamp, distinct from
+      // scheduledAt (the dose's intended instant). For retro logs marked
+      // 'taken', takenAt is now; 'skipped' carries null.
+      takenAt: s.status === 'taken' ? serverTimestamp() : null,
+      skipReason:
+        s.status === 'skipped'
+          ? 'Not logged at time of treatment creation'
+          : null,
+      lateNote: null,
+      doseAmount: args.doseAmount,
+      doseUnit: args.doseUnit,
+      cabinetItemId: args.cabinetItemId,
+      inventoryDebited: false,
+      retroactive: true,
+      createdBy: args.createdBy,
+      createdAt: serverTimestamp(),
+    })
+  }
+  await batch.commit()
+}
+
 // AK-123 — Append-only audit entry written when the admin clicks "I
 // understand, proceed anyway" on the overlapping-treatment soft-warn modal.
 // Lives at households/{hId}/treatments/{tId}/conflictAcknowledgements/{ackId}

@@ -349,6 +349,12 @@ export interface DoseLog {
   // Surfaces "Updated by admin" in the dose card. Optional — older logs
   // and member-written logs simply read as undefined.
   adminOverride?: boolean
+  // AK-121 — True when the log was written during the past-date catch-up
+  // flow at treatment-create time, not at the actual scheduledAt instant.
+  // Surfaces in dose history as "Logged retroactively"; never debits
+  // inventory (inventoryDebited stays false) because the retro flow can't
+  // know whether stock was already consumed at the historical time.
+  retroactive?: boolean
   // Inventory-clamp telemetry (bug #3 fix). When `inventoryDebited` is true
   // but the cabinet item didn't have enough stock to cover the full
   // doseAmount, `inventoryClamped` is true and `actualDebit` records the
