@@ -933,6 +933,50 @@ export async function loadLogsForDateRange(
 // Loads every regimen for active treatments in the household, grouped by tId.
 // Used by the Treatments adherence calc and the DoseHistory missed-dose
 // inference; piggybacks on existing collection structure with no new indexes.
+// AK-123 — Active treatments for one member, paired with their regimens.
+// Reuses loadAllActiveRegimens under the hood (active-status filter + regimen
+// fan-out) and JS-filters by memberId. Used by the step 3 → step 4 conflict
+// check in the treatment-create wizard, which compares date ranges per
+// medicineId. Fails silently: any read error returns [] so the conflict
+// check stays a soft UX gate, never load-bearing for the create flow.
+export async function getActiveTreatmentsWithRegimensForMember(
+  hId: string,
+  memberId: string,
+): Promise<Array<{ treatment: Treatment; regimens: Regimen[] }>> {
+  try {
+    const { treatments, regimensByTreatment } = await loadAllActiveRegimens(hId)
+    return treatments
+      .filter(t => t.memberId === memberId && t.status === 'active')
+      .map(t => ({ treatment: t, regimens: regimensByTreatment[t.tId] ?? [] }))
+  } catch {
+    return []
+  }
+}
+
+// AK-123 — Append-only audit entry written when the admin clicks "I
+// understand, proceed anyway" on the overlapping-treatment soft-warn modal.
+// Lives at households/{hId}/treatments/{tId}/conflictAcknowledgements/{ackId}
+// with a Firestore-generated id. Rules enforce admin-only create + self-uid
+// match, and forbid update/delete so the audit trail is immutable.
+export async function recordConflictAcknowledgement(
+  hId: string,
+  tId: string,
+  args: {
+    conflictingTreatmentId: string
+    conflictType: 'overlap'
+    acknowledgedByUid: string
+    acknowledgedByName: string
+  },
+): Promise<void> {
+  await addDoc(
+    collection(db, `households/${hId}/treatments/${tId}/conflictAcknowledgements`),
+    {
+      acknowledgedAt: serverTimestamp(),
+      ...args,
+    },
+  )
+}
+
 export async function loadAllActiveRegimens(
   hId: string,
 ): Promise<{ treatments: Treatment[]; regimensByTreatment: Record<string, Regimen[]> }> {

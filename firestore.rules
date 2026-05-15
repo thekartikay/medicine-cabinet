@@ -282,6 +282,20 @@ service cloud.firestore {
                              && request.resource.data.patientId == request.auth.uid);
           allow delete: if false;
         }
+
+        // ── /households/{hId}/treatments/{tId}/conflictAcknowledgements/{ackId}
+        // AK-123 — Append-only audit trail of "I understand, proceed anyway"
+        // taps on overlapping-treatment soft-warn modals. Admin-only create
+        // (only admins create treatments to begin with); writer must stamp
+        // their own uid so the row can't be impersonated. Never edited or
+        // deleted — preserves the override decision indefinitely.
+        match /conflictAcknowledgements/{ackId} {
+          allow read:   if isParticipant(hId);
+          allow create: if isAdmin(hId)
+                         && request.resource.data.acknowledgedByUid == request.auth.uid;
+          allow update: if false;
+          allow delete: if false;
+        }
       }
 
       // ── /households/{hId}/todaySummary/{date} ──────────────────────────
