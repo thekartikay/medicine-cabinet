@@ -10,8 +10,9 @@ import {
   createTreatment,
   addRegimen,
   subscribeTreatments,
+  subscribeCabinetItems,
+  getOrCreateDefaultCabinet,
   getHouseholdMembers,
-  getDefaultCabinetItems,
   loadLogsForDateRange,
   loadAllActiveRegimens,
   pauseTreatment,
@@ -87,6 +88,20 @@ function fmtDate(yyyymmdd: string): string {
   })
 }
 
+// Returns the IST date one day after the provided YYYY-MM-DD string. Used by
+// the step 2 → step 3 transition to push a fresh treatment's start date out
+// when the selected medicine's stock is insufficient (Change 1).
+function tomorrowISTString(today: string): string {
+  // Pivot at noon IST so date arithmetic is unambiguous regardless of UTC
+  // offset. setUTCDate handles month/year rollover.
+  const d = new Date(`${today}T12:00:00+05:30`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d)
+}
+
 function summarize(scheduleType: ScheduleType, days: number[], slots: TimeSlot[]): string {
   if (scheduleType === 'as-needed') return 'As needed'
   const times = slots.map(s => s.time).join(', ')
@@ -105,6 +120,10 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   // Wizard reference data
   const [members, setMembers] = useState<HouseholdMember[]>([])
   const [cabinetItems, setCabinetItems] = useState<CabinetItem[]>([])
+  // Bug #1 fix — surface cabinet-load errors instead of swallowing them.
+  // Empty string when healthy; otherwise an inline error message rendered
+  // in the step-2 picker.
+  const [cabinetError, setCabinetError] = useState('')
 
   // Step 1
   const [formName, setFormName] = useState('')
@@ -126,6 +145,14 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   const [formStartDate, setFormStartDate] = useState(todayISTString())
   const [formEndDate, setFormEndDate] = useState('')
   const [formOngoing, setFormOngoing] = useState(true)
+  // PRN-only safety cap (Change 2). Default 4 mirrors a typical paracetamol/
+  // ibuprofen ceiling and is editable by the admin before save.
+  const [formMaxDosesPerDay, setFormMaxDosesPerDay] = useState(4)
+  // Change 1 — set true when the step 2 → step 3 transition detects that the
+  // selected medicine's stock can't cover one dose. Drives the start-date
+  // minimum (tomorrow) and the amber explanation message in step 3.
+  // Only meaningful when formScheduleType !== 'as-needed'.
+  const [stockInsufficientForRestock, setStockInsufficientForRestock] = useState(false)
 
   // UI
   const [stepError, setStepError] = useState('')
@@ -192,11 +219,48 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     return unsub
   }, [hId])
 
-  // Pre-load wizard reference data (members + cabinet items)
+  // Bug #1 fix — Members are loaded once (rarely change during a wizard
+  // session); cabinet items use a real-time subscription so the step-2
+  // picker reflects items added in another tab/window without remounting,
+  // and so a transient permissions/network blip surfaces an inline error
+  // instead of silently producing an empty dropdown.
   useEffect(() => {
-    Promise.all([getHouseholdMembers(hId), getDefaultCabinetItems(hId)])
-      .then(([m, c]) => { setMembers(m); setCabinetItems(c) })
-      .catch(() => { /* selectors will show empty states */ })
+    getHouseholdMembers(hId)
+      .then(setMembers)
+      .catch(() => { /* member-select will show its empty state */ })
+  }, [hId])
+
+  useEffect(() => {
+    let cancelled = false
+    let unsubscribe: (() => void) | null = null
+    async function setup() {
+      setCabinetError('')
+      try {
+        const cId = await getOrCreateDefaultCabinet(hId)
+        if (cancelled) return
+        unsubscribe = subscribeCabinetItems(
+          hId,
+          cId,
+          (items) => {
+            if (cancelled) return
+            setCabinetItems(items)
+            setCabinetError('')
+          },
+          () => {
+            if (cancelled) return
+            setCabinetItems([])
+            setCabinetError('Could not load your cabinet. Check your connection.')
+          },
+        )
+      } catch {
+        if (!cancelled) {
+          setCabinetItems([])
+          setCabinetError('Could not load your cabinet. Check your connection.')
+        }
+      }
+    }
+    setup()
+    return () => { cancelled = true; unsubscribe?.() }
   }, [hId])
 
   // Per-treatment adherence over the trailing 7 days, plus the latest end-date
@@ -215,15 +279,13 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
       })()
 
-      const [logs, { regimensByTreatment }, freshCabinet] = await Promise.all([
+      const [logs, { regimensByTreatment }] = await Promise.all([
         loadLogsForDateRange(hId, fromDate, today),
         loadAllActiveRegimens(hId),
-        getDefaultCabinetItems(hId),
       ])
       if (cancelled) return
 
-      // Refresh cabinet snapshot so OOS detection tracks the latest qty.
-      setCabinetItems(freshCabinet)
+      // Cabinet snapshot comes from the real-time subscription set up above.
       setRegimensByTId(regimensByTreatment)
 
       const adherence: Record<string, number | null> = {}
@@ -287,6 +349,8 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setFormStartDate(todayISTString())
     setFormEndDate('')
     setFormOngoing(true)
+    setFormMaxDosesPerDay(4)
+    setStockInsufficientForRestock(false)
     setStepError('')
     setView('step1')
   }
@@ -329,6 +393,25 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     if (view === 'step2') {
       const selectedItem = cabinetItems.find(i => i.iId === formCabinetItemId)
       if (!selectedItem) { setView(next[view]); return }
+
+      // Change 1 — dose-vs-stock auto-shift. If the selected medicine doesn't
+      // have enough on hand to cover even one dose and the schedule is time-
+      // driven (not as-needed), push the start date to tomorrow so the user
+      // has a restock window. PRN treatments are intentionally exempt — they
+      // can be taken on demand whenever stock arrives.
+      const doseAmt = parseFloat(formDoseAmount)
+      const stockInsufficient =
+        !isNaN(doseAmt) && doseAmt > selectedItem.quantityOnHand
+      if (stockInsufficient && formScheduleType !== 'as-needed') {
+        const today = todayISTString()
+        if (!formStartDate || formStartDate <= today) {
+          setFormStartDate(tomorrowISTString(today))
+        }
+        setStockInsufficientForRestock(true)
+      } else {
+        setStockInsufficientForRestock(false)
+      }
+
       setCheckingInteraction(true)
       try {
         const otherMedicines = await getActiveTreatmentMedicines(hId, formMemberId)
@@ -389,6 +472,8 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setFormStartDate(todayISTString())
     setFormEndDate('')
     setFormOngoing(true)
+    setFormMaxDosesPerDay(4)
+    setStockInsufficientForRestock(false)
     setStepError('')
     setView('list')
   }
@@ -415,6 +500,10 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         startDate: formStartDate,
         endDate: formOngoing ? null : (formEndDate || null),
         ongoing: formOngoing,
+        // PRN-only — conditional spread so the field is omitted entirely
+        // (rather than written as undefined → Firestore would reject) for
+        // time-driven regimens.
+        ...(formScheduleType === 'as-needed' ? { maxDosesPerDay: formMaxDosesPerDay } : {}),
       })
       setView('list')
     } catch {
@@ -1057,7 +1146,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         <div className="cb-form">
           <div className="cb-field">
             <label className="cb-label" htmlFor="tr-medicine">Select from cabinet</label>
-            {cabinetItems.length === 0 ? (
+            {cabinetError ? (
+              <p className="cb-hint cb-hint--error" role="alert">{cabinetError}</p>
+            ) : cabinetItems.length === 0 ? (
               <p className="cb-hint">Your cabinet is empty. Add medicines in the Cabinet tab first.</p>
             ) : (
               <select
@@ -1170,6 +1261,28 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
             </div>
           )}
 
+          {formScheduleType === 'as-needed' && (
+            <div className="cb-field">
+              <label className="cb-label" htmlFor="tr-max-doses">Maximum doses per day</label>
+              <input
+                id="tr-max-doses"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={10}
+                className="cb-input"
+                value={formMaxDosesPerDay}
+                onChange={e => {
+                  const n = parseInt(e.target.value, 10)
+                  if (!isNaN(n)) setFormMaxDosesPerDay(Math.max(1, Math.min(10, n)))
+                }}
+              />
+              <p className="cb-hint" style={{ marginTop: 4 }}>
+                How many times can this medicine be taken in one day?
+              </p>
+            </div>
+          )}
+
           {formScheduleType !== 'as-needed' && (
             <div className="cb-field">
               <span className="cb-label">Dose times</span>
@@ -1245,8 +1358,14 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
               type="date"
               className="cb-input"
               value={formStartDate}
+              min={stockInsufficientForRestock ? tomorrowISTString(todayISTString()) : todayISTString()}
               onChange={e => setFormStartDate(e.target.value)}
             />
+            {stockInsufficientForRestock && (
+              <p className="tr-stock-restock-hint" role="status">
+                Not enough stock for this dose. Start date set to tomorrow to give you time to restock.
+              </p>
+            )}
           </div>
         </div>
       )}

@@ -812,6 +812,17 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                   key={dose.slotId}
                                                   className={`db-card tr-dose-card${isConfirmed ? ' tr-dose-card--just-confirmed' : ''}`}
                                                 >
+                                                  {(() => {
+                                                    // Bug #3 — Out-of-stock indicator. Informational only;
+                                                    // logging is still allowed (the dose-log transaction
+                                                    // now records inventoryClamped + actualDebit so audit
+                                                    // reconciliation can show the discrepancy).
+                                                    const stockItem = stockItems.find(s => s.iId === dose.cabinetItemId)
+                                                    const isOOS = stockItem !== undefined && stockItem.quantityOnHand === 0
+                                                    return isOOS ? (
+                                                      <span className="tr-oos-badge" role="status">Out of stock</span>
+                                                    ) : null
+                                                  })()}
                                                   <div className="tr-dose-row">
                                                     <span className="tr-dose-time">{dose.time}</span>
                                                     <div className="tr-dose-info">

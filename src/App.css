@@ -1778,6 +1778,33 @@
   white-space: nowrap;
 }
 
+/* Change 1 — Dose-vs-stock auto-shift explainer below the start-date input. */
+.tr-stock-restock-hint {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(239, 159, 39, 0.12);
+  color: #B47800;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Bug #3 fix — Out-of-stock informational badge on dose cards. Amber, sits
+   above the dose row, narrow self-align so it doesn't span the full card. */
+.tr-oos-badge {
+  align-self: flex-start;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: rgba(239, 159, 39, 0.15);
+  color: #EF9F27;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: 6px;
+  flex-shrink: 0;
+}
+
 .tr-log-badge--taken {
   background: rgba(90, 182, 72, 0.15);
   color: var(--sprout);
