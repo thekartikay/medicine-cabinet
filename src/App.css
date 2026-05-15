@@ -333,6 +333,165 @@
 .tcm-button--secondary:hover { background-color: rgba(16, 100, 112, 0.06); }
 .tcm-button--secondary:active { background-color: rgba(16, 100, 112, 0.12); }
 
+/* ── PastDateModal (pdm- prefix, AK-121) ──────────────────────── */
+.pdm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 300;
+}
+
+.pdm-card {
+  background: #ffffff;
+  border-radius: 24px;
+  max-width: 24rem;
+  width: 100%;
+  padding: 1.5rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+  text-align: center;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pdm-icon-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #e6f8f9;
+  color: #106470;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.pdm-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #106470;
+  margin: 0;
+}
+
+.pdm-body {
+  font-size: 0.95rem;
+  color: #444;
+  line-height: 1.45;
+  margin: 0;
+}
+
+/* "More than 30 days" advisory — amber, same palette as the OOS badge. */
+.pdm-large-window {
+  background: rgba(239, 159, 39, 0.12);
+  color: #B47800;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.pdm-button {
+  width: 100%;
+  padding: 0.875rem 1.25rem;
+  border-radius: 9999px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s, background 0.2s;
+}
+
+.pdm-button--primary {
+  background-color: #5DC1C8;
+  color: #ffffff;
+  border: none;
+  margin-top: 0.5rem;
+}
+
+.pdm-button--primary:hover { opacity: 0.9; }
+.pdm-button--primary:active { opacity: 0.8; }
+
+.pdm-button--secondary {
+  background-color: transparent;
+  color: #106470;
+  border: 1.5px solid #106470;
+}
+
+.pdm-button--secondary:hover { background-color: rgba(16, 100, 112, 0.06); }
+.pdm-button--secondary:active { background-color: rgba(16, 100, 112, 0.12); }
+
+/* ── RetroLogSheet (retro- prefix, AK-121) ───────────────────── */
+/* Sheet structure inherits from .bs-* (existing bottom-sheet base in
+   Cabinet.tsx); .retro-* covers the checklist-specific layout. */
+
+.retro-cap-note {
+  background: rgba(239, 159, 39, 0.12);
+  color: #B47800;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0 0 12px;
+}
+
+.retro-checklist {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  margin: 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.retro-day-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.retro-day-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: #106470;
+  margin: 0 0 2px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border, #e5e5e5);
+}
+
+.retro-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  cursor: pointer;
+}
+
+.retro-checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: #5DC1C8;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.retro-row-time {
+  font-weight: 600;
+  color: #1a1a1a;
+  min-width: 56px;
+}
+
+.retro-row-food {
+  color: #666;
+  font-size: 0.875rem;
+}
+
 /* ── OfflineBanner (ob- prefix) ─────────────────────────────── */
 
 .ob-banner {

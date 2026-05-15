@@ -22,10 +22,14 @@ import {
   getActiveTreatmentMedicines,
   getActiveTreatmentsWithRegimensForMember,
   recordConflictAcknowledgement,
+  logRetroactiveDoses,
 } from '../services/firestoreService'
+import { buildSlotId } from '../lib/paths'
 import { checkCabinetInteractions } from '../services/geminiService'
 import { InteractionWarningModal } from '../components/InteractionWarningModal'
 import { TreatmentConflictModal, type ConflictType } from '../components/TreatmentConflictModal'
+import { PastDateModal } from '../components/PastDateModal'
+import { RetroLogSheet, type RetroSlot } from '../components/RetroLogSheet'
 import type {
   CabinetItem,
   CabinetItemUnit,
@@ -116,6 +120,68 @@ const MAX_SLOTS_PER_DAY = 4
 function nextSlotDefault(existingSlots: TimeSlot[]): string | null {
   const usedTimes = new Set(existingSlots.map(s => s.time))
   return SLOT_DEFAULTS.find(t => !usedTimes.has(t)) ?? null
+}
+
+// AK-121 — Enumerate every (date × slot) pair from startDate to yesterday
+// inclusive, newest-first. Caps at 30 most-recent days (the RetroLogSheet
+// surfaces the cap via wasCapped → amber note). Slot IDs are computed via
+// the canonical buildSlotId helper so the resulting Firestore writes line
+// up with the rest of the dose-log naming convention.
+const MAX_RETRO_DAYS = 30
+
+function generatePastSlots(
+  startDate: string,
+  slots: TimeSlot[],
+  patientId: string,
+  tId: string,
+  rId: string,
+): { slots: RetroSlot[]; wasCapped: boolean } {
+  const today = todayISTString()
+  if (startDate >= today || slots.length === 0) {
+    return { slots: [], wasCapped: false }
+  }
+  // Iterate dates anchored at noon IST. UTC-day increments are unambiguous
+  // because IST has no DST. The iteration window itself is capped at
+  // MAX_RETRO_DAYS (walking back from yesterday) so a user-entered start
+  // date far in the past doesn't spin a giant loop just to discard most of
+  // the results during slicing.
+  const startNoon = new Date(`${startDate}T12:00:00+05:30`)
+  const todayNoon = new Date(`${today}T12:00:00+05:30`)
+  const capStart = new Date(todayNoon)
+  capStart.setUTCDate(capStart.getUTCDate() - MAX_RETRO_DAYS)
+  const wasCapped = startNoon < capStart
+  const effectiveStart = wasCapped ? capStart : startNoon
+
+  const datesAscending: string[] = []
+  for (
+    const cursor = new Date(effectiveStart);
+    cursor < todayNoon;
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  ) {
+    datesAscending.push(
+      new Intl.DateTimeFormat('sv-SE', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(cursor),
+    )
+  }
+  const dates = datesAscending.reverse()
+
+  const out: RetroSlot[] = []
+  for (const date of dates) {
+    const displayDate = fmtDate(date)
+    for (const slot of slots) {
+      const hhmm = slot.time.replace(':', '')
+      out.push({
+        slotId: buildSlotId(tId, rId, patientId, date, hhmm),
+        date,
+        displayDate,
+        time: slot.time,
+        foodTiming: slot.foodTiming,
+      })
+    }
+  }
+  return { slots: out, wasCapped }
 }
 
 // AK-123 — Classify how a new treatment's date range relates to an existing
@@ -245,6 +311,22 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   } | null>(null)
   const [conflictAcknowledged, setConflictAcknowledged] = useState(false)
   const [acknowledgedConflictingTreatmentId, setAcknowledgedConflictingTreatmentId] = useState('')
+  // AK-121 — Past-date / retroactive-log flow. Pipeline:
+  //   1. pastDateModal opens when the wizard's start date is in the past
+  //      (and the schedule isn't PRN). Two branches:
+  //        a. "Track from today" → reset formStartDate, advance to step 4
+  //        b. "Log past doses"   → leave formStartDate, advance, mark willLogPastDoses
+  //   2. handleSave succeeds; if willLogPastDoses, generate retroSlots and
+  //      open retroSheet instead of returning to the list.
+  //   3. handleRetroSave writes the chosen logs via logRetroactiveDoses.
+  const [pastDateModal, setPastDateModal] = useState(false)
+  const [willLogPastDoses, setWillLogPastDoses] = useState(false)
+  const [retroSheet, setRetroSheet] = useState(false)
+  const [retroTId, setRetroTId] = useState('')
+  const [retroRId, setRetroRId] = useState('')
+  const [retroChecks, setRetroChecks] = useState<Record<string, boolean>>({})
+  const [retroSlots, setRetroSlots] = useState<RetroSlot[]>([])
+  const [retroWasCapped, setRetroWasCapped] = useState(false)
 
   // ── Per-treatment regimens (used for OOS detection in the list view) ──
   // Loaded alongside adherence so a single Firestore round-trip serves both.
@@ -435,6 +517,14 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setPendingConflict(null)
     setConflictAcknowledged(false)
     setAcknowledgedConflictingTreatmentId('')
+    setPastDateModal(false)
+    setWillLogPastDoses(false)
+    setRetroSheet(false)
+    setRetroTId('')
+    setRetroRId('')
+    setRetroChecks({})
+    setRetroSlots([])
+    setRetroWasCapped(false)
     setStepError('')
     setView('step1')
   }
@@ -480,6 +570,14 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setPendingConflict(null)
     setConflictAcknowledged(false)
     setAcknowledgedConflictingTreatmentId('')
+    setPastDateModal(false)
+    setWillLogPastDoses(false)
+    setRetroSheet(false)
+    setRetroTId('')
+    setRetroRId('')
+    setRetroChecks({})
+    setRetroSlots([])
+    setRetroWasCapped(false)
     }
     const next: Record<TxView, TxView> = {
       list: 'step1', step1: 'step2', step2: 'step3', step3: 'step4', step4: 'step4',
@@ -545,9 +643,21 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
             medicineName: formDisplayName,
             existingTreatmentId: found.existingTreatmentId,
           })
-        } else {
-          setView(next[view])
+          setCheckingConflict(false)
+          return
         }
+        // No conflict — AK-121 past-date branch. Only fires for time-driven
+        // schedules; PRN treatments don't have meaningful past doses to
+        // retro-log (no slots → nothing to enumerate).
+        if (
+          formScheduleType !== 'as-needed'
+          && formStartDate < todayISTString()
+        ) {
+          setCheckingConflict(false)
+          setPastDateModal(true)
+          return
+        }
+        setView(next[view])
       } catch {
         setView(next[view])
       } finally {
@@ -644,6 +754,14 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setPendingConflict(null)
     setConflictAcknowledged(false)
     setAcknowledgedConflictingTreatmentId('')
+    setPastDateModal(false)
+    setWillLogPastDoses(false)
+    setRetroSheet(false)
+    setRetroTId('')
+    setRetroRId('')
+    setRetroChecks({})
+    setRetroSlots([])
+    setRetroWasCapped(false)
     setStepError('')
     setView('list')
   }
@@ -658,7 +776,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         memberName: formMemberName,
         category: formCategory,
       })
-      await addRegimen(hId, tId, {
+      // AK-121 — bind rId so the retro-log path can address the right
+      // regimen when generating historical slot IDs.
+      const rId = await addRegimen(hId, tId, {
         cabinetItemId: formCabinetItemId,
         medicineId: formMedicineId,
         displayName: formDisplayName.trim(),
@@ -692,12 +812,76 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
           // nice-to-have, not a correctness requirement.
         }
       }
+      // AK-121 — If the user picked "log past doses" on the PastDateModal,
+      // generate the retro slot list now (using the real tId + rId) and open
+      // the RetroLogSheet instead of returning to the list. handleRetroSave
+      // closes the wizard.
+      if (willLogPastDoses) {
+        const generated = generatePastSlots(
+          formStartDate,
+          formSlots,
+          formMemberId,
+          tId,
+          rId,
+        )
+        if (generated.slots.length > 0) {
+          const initialChecks: Record<string, boolean> = {}
+          for (const s of generated.slots) initialChecks[s.slotId] = true
+          setRetroTId(tId)
+          setRetroRId(rId)
+          setRetroSlots(generated.slots)
+          setRetroWasCapped(generated.wasCapped)
+          setRetroChecks(initialChecks)
+          setRetroSheet(true)
+          return
+        }
+        // Edge: PRN got through somehow, or startDate === today. Fall
+        // through to the normal close — no slots to log.
+      }
       setView('list')
     } catch {
       setStepError('Failed to save. Please try again.')
     } finally {
       setSaveLoading(false)
     }
+  }
+
+  // AK-121 — Persist the user's retro checklist choices and close the
+  // wizard. Failure here doesn't roll back the treatment (already saved);
+  // the sheet stays open so the user can retry.
+  async function handleRetroSave() {
+    try {
+      await logRetroactiveDoses(hId, retroTId, {
+        rId: retroRId,
+        patientId: formMemberId,
+        cabinetItemId: formCabinetItemId,
+        doseAmount: parseFloat(formDoseAmount),
+        doseUnit: formDoseUnit,
+        createdBy: auth.currentUser?.uid ?? currentUid,
+        slots: retroSlots.map(s => ({
+          slotId: s.slotId,
+          scheduledDate: s.date,
+          scheduledTime: s.time,
+          status: (retroChecks[s.slotId] ?? true) ? 'taken' : 'skipped',
+        })),
+      })
+      setRetroSheet(false)
+      setView('list')
+    } catch {
+      setStepError('Could not save past doses. Try again, or skip for now.')
+    }
+  }
+
+  function handleRetroSkip() {
+    setRetroSheet(false)
+    setView('list')
+  }
+
+  function toggleRetroCheck(slotId: string) {
+    setRetroChecks(prev => ({
+      ...prev,
+      [slotId]: !(prev[slotId] ?? true),
+    }))
   }
 
   // Slot helpers — AK-122 smart defaults + duplicate guards.
@@ -732,6 +916,14 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setPendingConflict(null)
     setConflictAcknowledged(false)
     setAcknowledgedConflictingTreatmentId('')
+    setPastDateModal(false)
+    setWillLogPastDoses(false)
+    setRetroSheet(false)
+    setRetroTId('')
+    setRetroRId('')
+    setRetroChecks({})
+    setRetroSlots([])
+    setRetroWasCapped(false)
   }
 
   function setSlotTime(i: number, time: string) {
@@ -1727,6 +1919,35 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
                 },
               }
             : {})}
+        />
+      )}
+
+      {pastDateModal && (
+        <PastDateModal
+          startDate={formStartDate}
+          onTrackFromToday={() => {
+            setFormStartDate(todayISTString())
+            setWillLogPastDoses(false)
+            setPastDateModal(false)
+            setView('step4')
+          }}
+          onLogPastDoses={() => {
+            setWillLogPastDoses(true)
+            setPastDateModal(false)
+            setView('step4')
+          }}
+        />
+      )}
+
+      {retroSheet && (
+        <RetroLogSheet
+          slots={retroSlots}
+          checks={retroChecks}
+          medicineName={formDisplayName}
+          wasCapped={retroWasCapped}
+          onToggle={toggleRetroCheck}
+          onSave={handleRetroSave}
+          onSkip={handleRetroSkip}
         />
       )}
 
