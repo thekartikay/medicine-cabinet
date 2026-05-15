@@ -6,6 +6,7 @@ import {
 import { httpsCallable } from 'firebase/functions'
 import { functions } from '../lib/firebase'
 import { todayISTString } from '../lib/paths'
+import { auth } from '../lib/firebase'
 import {
   createTreatment,
   addRegimen,
@@ -19,9 +20,12 @@ import {
   resumeTreatment,
   endTreatment,
   getActiveTreatmentMedicines,
+  getActiveTreatmentsWithRegimensForMember,
+  recordConflictAcknowledgement,
 } from '../services/firestoreService'
 import { checkCabinetInteractions } from '../services/geminiService'
 import { InteractionWarningModal } from '../components/InteractionWarningModal'
+import { TreatmentConflictModal, type ConflictType } from '../components/TreatmentConflictModal'
 import type {
   CabinetItem,
   CabinetItemUnit,
@@ -114,6 +118,53 @@ function nextSlotDefault(existingSlots: TimeSlot[]): string | null {
   return SLOT_DEFAULTS.find(t => !usedTimes.has(t)) ?? null
 }
 
+// AK-123 — Classify how a new treatment's date range relates to an existing
+// regimen's range. Operates on YYYY-MM-DD strings (lexicographic comparison)
+// + null = "open-ended" sentinel. Returns null for disjoint ranges (no
+// conflict at all). Caller uses the classification to drive a hard-block
+// modal (duplicate / subset) or a soft-warn modal (overlap).
+//
+// Spec:
+//   No conflict:
+//     - existing ended before new starts: newStart > existingEnd
+//     - new ends before existing starts:  existingStart > newEnd
+//   Otherwise, overlap exists. Classify:
+//     duplicate — identical ranges (treat null === null as equal)
+//     subset   — one range is wholly inside the other (inclusive endpoints,
+//                with null meaning "extends to infinity" on that side)
+//     overlap  — partial intersection that isn't duplicate or subset
+function detectConflict(
+  newStart: string,
+  newEnd: string | null,
+  existingStart: string,
+  existingEnd: string | null,
+): ConflictType | null {
+  // Disjoint ranges. If either end is null/ongoing, that side never ends,
+  // so the corresponding inequality can't be satisfied.
+  if (existingEnd !== null && newStart > existingEnd) return null
+  if (newEnd !== null && existingStart > newEnd) return null
+
+  // Identical ranges (null === null evaluates true, covering "both ongoing
+  // from the same start date").
+  if (newStart === existingStart && newEnd === existingEnd) return 'duplicate'
+
+  // new contained in existing.
+  const newInsideExisting =
+    newStart >= existingStart
+    && (existingEnd === null
+        || (newEnd !== null && newEnd <= existingEnd))
+
+  // existing contained in new.
+  const existingInsideNew =
+    existingStart >= newStart
+    && (newEnd === null
+        || (existingEnd !== null && existingEnd <= newEnd))
+
+  if (newInsideExisting || existingInsideNew) return 'subset'
+
+  return 'overlap'
+}
+
 function summarize(scheduleType: ScheduleType, days: number[], slots: TimeSlot[]): string {
   if (scheduleType === 'as-needed') return 'As needed'
   const times = slots.map(s => s.time).join(', ')
@@ -181,6 +232,19 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     withMedicineNames: string[]
     riskLevel: 'moderate' | 'high'
   } | null>(null)
+  // AK-123 — Conflict check gate at step3 → step4 transition. Hard blocks
+  // ('duplicate' / 'subset') stay on step 3; soft warns ('overlap') set
+  // conflictAcknowledged + acknowledgedConflictingTreatmentId before
+  // advancing so handleSave can stamp an audit row.
+  const [checkingConflict, setCheckingConflict] = useState(false)
+  const [pendingConflict, setPendingConflict] = useState<{
+    type: ConflictType
+    existingTreatmentName: string
+    medicineName: string
+    existingTreatmentId: string
+  } | null>(null)
+  const [conflictAcknowledged, setConflictAcknowledged] = useState(false)
+  const [acknowledgedConflictingTreatmentId, setAcknowledgedConflictingTreatmentId] = useState('')
 
   // ── Per-treatment regimens (used for OOS detection in the list view) ──
   // Loaded alongside adherence so a single Firestore round-trip serves both.
@@ -368,6 +432,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setFormMaxDosesPerDay(4)
     setStockInsufficientForRestock(false)
     setSlotErrors({})
+    setPendingConflict(null)
+    setConflictAcknowledged(false)
+    setAcknowledgedConflictingTreatmentId('')
     setStepError('')
     setView('step1')
   }
@@ -410,6 +477,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
       // AK-122 — validate('step3') confirmed there are no duplicates; clear
       // any per-slot errors that may have lingered from prior edits.
       setSlotErrors({})
+    setPendingConflict(null)
+    setConflictAcknowledged(false)
+    setAcknowledgedConflictingTreatmentId('')
     }
     const next: Record<TxView, TxView> = {
       list: 'step1', step1: 'step2', step2: 'step3', step3: 'step4', step4: 'step4',
@@ -420,6 +490,72 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     // member's other active-treatment regimens. Any error (no other meds, no
     // interaction, Gemini failure, no cabinet match) advances normally; only a
     // positive hit opens the confirm modal and pauses the transition.
+    // AK-123 — Conflict check at the step 3 → step 4 boundary. Compares the
+    // wizard's medicine + date range against every active treatment the same
+    // member already has for the same medicineId. Hard blocks stay on step 3;
+    // soft warns mark the deliberate-override flag so handleSave can stamp an
+    // audit row. Any error (read failure, no matching active treatments)
+    // advances normally — the check is informational, not load-bearing.
+    if (view === 'step3') {
+      setCheckingConflict(true)
+      // A prior attempt may have left these set if the user dismissed the
+      // soft-warn modal, edited the dates, and now retries. Reset before
+      // the new check so a successful no-conflict advance doesn't carry a
+      // stale acknowledgement into handleSave.
+      setConflictAcknowledged(false)
+      setAcknowledgedConflictingTreatmentId('')
+      try {
+        const memberTreatments = await getActiveTreatmentsWithRegimensForMember(
+          hId,
+          formMemberId,
+        )
+        const newEnd = formOngoing ? null : (formEndDate || null)
+        // Walk every regimen across the member's active treatments. First
+        // conflict wins — captured in a local variable so we can branch
+        // outside the loop without leaning on stale state during this tick.
+        let found: {
+          type: ConflictType
+          existingTreatmentName: string
+          existingTreatmentId: string
+        } | null = null
+        outer: for (const { treatment, regimens } of memberTreatments) {
+          for (const regimen of regimens) {
+            if (regimen.medicineId !== formMedicineId) continue
+            const existingEnd = regimen.ongoing ? null : (regimen.endDate || null)
+            const conflict = detectConflict(
+              formStartDate,
+              newEnd,
+              regimen.startDate,
+              existingEnd,
+            )
+            if (conflict) {
+              found = {
+                type: conflict,
+                existingTreatmentName: treatment.name,
+                existingTreatmentId: treatment.tId,
+              }
+              break outer
+            }
+          }
+        }
+        if (found) {
+          setPendingConflict({
+            type: found.type,
+            existingTreatmentName: found.existingTreatmentName,
+            medicineName: formDisplayName,
+            existingTreatmentId: found.existingTreatmentId,
+          })
+        } else {
+          setView(next[view])
+        }
+      } catch {
+        setView(next[view])
+      } finally {
+        setCheckingConflict(false)
+      }
+      return
+    }
+
     if (view === 'step2') {
       const selectedItem = cabinetItems.find(i => i.iId === formCabinetItemId)
       if (!selectedItem) { setView(next[view]); return }
@@ -505,6 +641,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setFormMaxDosesPerDay(4)
     setStockInsufficientForRestock(false)
     setSlotErrors({})
+    setPendingConflict(null)
+    setConflictAcknowledged(false)
+    setAcknowledgedConflictingTreatmentId('')
     setStepError('')
     setView('list')
   }
@@ -536,6 +675,23 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         // time-driven regimens.
         ...(formScheduleType === 'as-needed' ? { maxDosesPerDay: formMaxDosesPerDay } : {}),
       })
+      // AK-123 — Audit row stamped only after both writes above succeed,
+      // and only when the admin actively acknowledged a soft-warn overlap.
+      // Best-effort: a failed audit write must NOT roll back the treatment.
+      if (conflictAcknowledged && acknowledgedConflictingTreatmentId) {
+        try {
+          await recordConflictAcknowledgement(hId, tId, {
+            conflictingTreatmentId: acknowledgedConflictingTreatmentId,
+            conflictType: 'overlap',
+            acknowledgedByUid: auth.currentUser?.uid ?? currentUid,
+            acknowledgedByName: auth.currentUser?.displayName ?? '',
+          })
+        } catch {
+          // Audit write failed; treatment is already created. Surface via
+          // logs only — don't error the user. The conflict-tracking is a
+          // nice-to-have, not a correctness requirement.
+        }
+      }
       setView('list')
     } catch {
       setStepError('Failed to save. Please try again.')
@@ -573,6 +729,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     // off-by-one. Cheapest correct path: wipe the error map; users will
     // re-trigger detection on their next edit.
     setSlotErrors({})
+    setPendingConflict(null)
+    setConflictAcknowledged(false)
+    setAcknowledgedConflictingTreatmentId('')
   }
 
   function setSlotTime(i: number, time: string) {
@@ -1534,9 +1693,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
             className="cb-submit-btn"
             onClick={goNext}
             style={{ marginTop: 8 }}
-            disabled={checkingInteraction}
+            disabled={checkingInteraction || checkingConflict}
           >
-            {checkingInteraction ? 'Checking…' : 'Next'}
+            {checkingInteraction || checkingConflict ? 'Checking…' : 'Next'}
           </button>
         </>
       )}
@@ -1549,6 +1708,25 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
             setView('step3')
           }}
           onGoBack={() => setPendingInteractionWarning(null)}
+        />
+      )}
+
+      {pendingConflict && (
+        <TreatmentConflictModal
+          conflictType={pendingConflict.type}
+          existingTreatmentName={pendingConflict.existingTreatmentName}
+          medicineName={pendingConflict.medicineName}
+          onGoBack={() => setPendingConflict(null)}
+          {...(pendingConflict.type === 'overlap'
+            ? {
+                onProceed: () => {
+                  setConflictAcknowledged(true)
+                  setAcknowledgedConflictingTreatmentId(pendingConflict.existingTreatmentId)
+                  setPendingConflict(null)
+                  setView('step4')
+                },
+              }
+            : {})}
         />
       )}
 

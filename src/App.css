@@ -244,6 +244,95 @@
 .iw-button--secondary:hover { background-color: rgba(16, 100, 112, 0.06); }
 .iw-button--secondary:active { background-color: rgba(16, 100, 112, 0.12); }
 
+/* ── TreatmentConflictModal (tcm- prefix, AK-123) ─────────────── */
+/* Same card / overlay shape as .ae-* and .iw-*; varies the icon
+   colour (red for hard block, amber for soft warn) and offers either a
+   single Go-back button (hard block) or two stacked buttons (soft warn). */
+
+.tcm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 300;
+}
+
+.tcm-card {
+  background: #ffffff;
+  border-radius: 24px;
+  max-width: 24rem;
+  width: 100%;
+  padding: 1.5rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+  text-align: center;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tcm-icon-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.tcm-icon-circle--danger { background: #E24B4A; }
+.tcm-icon-circle--warn   { background: #EF9F27; }
+
+.tcm-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #106470;
+  margin: 0;
+}
+
+.tcm-body {
+  font-size: 0.95rem;
+  color: #444;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.tcm-button {
+  width: 100%;
+  padding: 0.875rem 1.25rem;
+  border-radius: 9999px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s, background 0.2s;
+}
+
+.tcm-button--primary {
+  background-color: #5DC1C8;
+  color: #ffffff;
+  border: none;
+  margin-top: 0.5rem;
+}
+
+.tcm-button--primary:hover { opacity: 0.9; }
+.tcm-button--primary:active { opacity: 0.8; }
+
+.tcm-button--secondary {
+  background-color: transparent;
+  color: #106470;
+  border: 1.5px solid #106470;
+}
+
+.tcm-button--secondary:hover { background-color: rgba(16, 100, 112, 0.06); }
+.tcm-button--secondary:active { background-color: rgba(16, 100, 112, 0.12); }
+
 /* ── OfflineBanner (ob- prefix) ─────────────────────────────── */
 
 .ob-banner {
