@@ -213,6 +213,10 @@ export interface Regimen {
   endDate: string | null
   ongoing: boolean
   createdAt: Timestamp
+  // PRN-only safety cap. Number of times this regimen can be taken in one
+  // IST day; undefined = no client-side limit (older regimens read as such).
+  // Only meaningful when scheduleType === 'as-needed'; ignored otherwise.
+  maxDosesPerDay?: number
 }
 
 export interface DoseSlotDisplay {
@@ -345,4 +349,13 @@ export interface DoseLog {
   // Surfaces "Updated by admin" in the dose card. Optional — older logs
   // and member-written logs simply read as undefined.
   adminOverride?: boolean
+  // Inventory-clamp telemetry (bug #3 fix). When `inventoryDebited` is true
+  // but the cabinet item didn't have enough stock to cover the full
+  // doseAmount, `inventoryClamped` is true and `actualDebit` records the
+  // physical decrement that actually landed (<= doseAmount). Audit
+  // reconciliation can use this to surface "logged 5, but only 2 in stock"
+  // without flagging the log as a discrepancy. Both fields are optional —
+  // older logs read as undefined and behave as if not clamped.
+  inventoryClamped?: boolean
+  actualDebit?: number
 }

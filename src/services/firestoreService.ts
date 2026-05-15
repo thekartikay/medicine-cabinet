@@ -314,6 +314,10 @@ export async function addRegimen(
     startDate: string
     endDate: string | null
     ongoing: boolean
+    // PRN safety cap. Only set when scheduleType === 'as-needed'. Spread
+    // via ...data into the regimen doc, so when undefined no field is
+    // written (older PRN regimens stay unfielded → treated as no limit).
+    maxDosesPerDay?: number
   },
 ): Promise<string> {
   const rId = crypto.randomUUID()
@@ -459,7 +463,13 @@ export async function logDose(
     lateNote?: string | null
     createdBy: string
   },
-): Promise<{ slotId: string; inventoryDebited: boolean; alreadyLogged: boolean }> {
+): Promise<{
+  slotId: string
+  inventoryDebited: boolean
+  alreadyLogged: boolean
+  inventoryClamped: boolean
+  actualDebit: number
+}> {
   const cId = await getOrCreateDefaultCabinet(hId)
   const hhmm = args.scheduledTime.replace(":", "")
   const slotId = buildSlotId(args.tId, args.rId, args.patientId, args.scheduledDate, hhmm)
@@ -484,7 +494,13 @@ export async function logDose(
     // taken/late log and (critically) re-debiting inventory.
     const existing = existingLog.exists() ? (existingLog.data() as DoseLog) : null
     if (existing && existing.status !== "missed") {
-      return { slotId, inventoryDebited: existing.inventoryDebited, alreadyLogged: true }
+      return {
+        slotId,
+        inventoryDebited: existing.inventoryDebited,
+        alreadyLogged: true,
+        inventoryClamped: false,
+        actualDebit: 0,
+      }
     }
     const previouslyDebited = existing?.inventoryDebited ?? false
 
@@ -502,9 +518,18 @@ export async function logDose(
       && itemSnap.exists()
       && !previouslyDebited
 
+    // Bug #3 — capture both the clamp signal and the actual physical
+    // decrement that lands on quantityOnHand. The transaction never writes a
+    // negative quantity (Math.max guards that), but when stock < dose the
+    // log records what we *could* debit so audit reconciliation isn't
+    // silently inconsistent.
     let newQty = 0
+    let inventoryClamped = false
+    let actualDebit = 0
     if (debitsInventory) {
       const item = itemSnap.data() as CabinetItem
+      actualDebit = Math.min(item.quantityOnHand, args.doseAmount)
+      inventoryClamped = item.quantityOnHand < args.doseAmount
       newQty = Math.max(0, item.quantityOnHand - args.doseAmount)
     }
 
@@ -526,6 +551,8 @@ export async function logDose(
       doseUnit: args.doseUnit,
       cabinetItemId: args.cabinetItemId,
       inventoryDebited: debitsInventory,
+      inventoryClamped,
+      actualDebit,
       createdBy: args.createdBy,
       createdAt: serverTimestamp(),
     })
@@ -537,7 +564,13 @@ export async function logDose(
       })
     }
 
-    return { slotId, inventoryDebited: debitsInventory, alreadyLogged: false }
+    return {
+      slotId,
+      inventoryDebited: debitsInventory,
+      alreadyLogged: false,
+      inventoryClamped,
+      actualDebit,
+    }
   })
 }
 
@@ -567,7 +600,13 @@ export async function adminMarkAsTaken(
     memberName: string | null
     adminName: string | null
   },
-): Promise<{ slotId: string; inventoryDebited: boolean; alreadyLogged: boolean }> {
+): Promise<{
+  slotId: string
+  inventoryDebited: boolean
+  alreadyLogged: boolean
+  inventoryClamped: boolean
+  actualDebit: number
+}> {
   const cId = await getOrCreateDefaultCabinet(hId)
   const hhmm = args.scheduledTime.replace(":", "")
   const slotId = buildSlotId(args.tId, args.rId, args.patientId, args.scheduledDate, hhmm)
@@ -586,7 +625,13 @@ export async function adminMarkAsTaken(
 
     const existing = existingLog.exists() ? (existingLog.data() as DoseLog) : null
     if (existing && existing.status !== "missed") {
-      return { slotId, inventoryDebited: existing.inventoryDebited, alreadyLogged: true }
+      return {
+        slotId,
+        inventoryDebited: existing.inventoryDebited,
+        alreadyLogged: true,
+        inventoryClamped: false,
+        actualDebit: 0,
+      }
     }
     const previouslyDebited = existing?.inventoryDebited ?? false
 
@@ -596,9 +641,15 @@ export async function adminMarkAsTaken(
 
     const debitsInventory = !auditFenced && itemSnap.exists() && !previouslyDebited
 
+    // Bug #3 — same clamp telemetry as logDose. The admin-override path
+    // hits the same under-debit edge case when stock < dose.
     let newQty = 0
+    let inventoryClamped = false
+    let actualDebit = 0
     if (debitsInventory) {
       const item = itemSnap.data() as CabinetItem
+      actualDebit = Math.min(item.quantityOnHand, args.doseAmount)
+      inventoryClamped = item.quantityOnHand < args.doseAmount
       newQty = Math.max(0, item.quantityOnHand - args.doseAmount)
     }
 
@@ -619,6 +670,8 @@ export async function adminMarkAsTaken(
       doseUnit: args.doseUnit,
       cabinetItemId: args.cabinetItemId,
       inventoryDebited: debitsInventory,
+      inventoryClamped,
+      actualDebit,
       createdBy: args.adminUid,
       createdAt: serverTimestamp(),
       adminOverride: true,
@@ -631,7 +684,13 @@ export async function adminMarkAsTaken(
       })
     }
 
-    return { slotId, inventoryDebited: debitsInventory, alreadyLogged: false }
+    return {
+      slotId,
+      inventoryDebited: debitsInventory,
+      alreadyLogged: false,
+      inventoryClamped,
+      actualDebit,
+    }
   }).then(async (result) => {
     // Notification write is non-transactional and best-effort: a failed
     // notification must NOT roll back the override. Skip the write entirely
