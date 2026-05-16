@@ -127,6 +127,17 @@ function nextSlotDefault(existingSlots: TimeSlot[]): string | null {
 // surfaces the cap via wasCapped → amber note). Slot IDs are computed via
 // the canonical buildSlotId helper so the resulting Firestore writes line
 // up with the rest of the dose-log naming convention.
+// AK-129 — Title-case singular label for the read-only unit pill in the
+// treatment-creation form. `ml` is preserved lowercase by convention; any
+// other string (including user-typed custom units saved as 'other') is
+// title-cased on its first character so a saved value of "puff" reads as
+// "Puff", "drop" as "Drop", etc.
+function unitPillLabel(unit: string): string {
+  if (!unit) return ''
+  if (unit === 'ml') return 'ml'
+  return unit.charAt(0).toUpperCase() + unit.slice(1)
+}
+
 const MAX_RETRO_DAYS = 30
 
 function generatePastSlots(
@@ -503,7 +514,6 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setFormCabinetItemId('')
     setFormMedicineId('')
     setFormDoseAmount('')
-    setFormDoseUnit('tablet')
     setFormDisplayName('')
     setFormScheduleType('daily')
     setFormScheduleDays([1, 2, 3, 4, 5])
@@ -740,7 +750,6 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setFormCabinetItemId('')
     setFormMedicineId('')
     setFormDoseAmount('')
-    setFormDoseUnit('tablet')
     setFormDisplayName('')
     setFormScheduleType('daily')
     setFormScheduleDays([1, 2, 3, 4, 5])
@@ -1627,17 +1636,16 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
               />
             </div>
             <div className="cb-field">
-              <label className="cb-label" htmlFor="tr-dose-unit">Unit</label>
-              <select
-                id="tr-dose-unit"
-                className="cb-input cb-select"
-                value={formDoseUnit}
-                onChange={e => setFormDoseUnit(e.target.value as CabinetItemUnit)}
+              <span className="cb-label">Unit</span>
+              {/* AK-129 — Read-only; the unit is inherited from the chosen
+                  cabinet item (selectCabinetItem populates formDoseUnit) and
+                  must not diverge from how the medicine is stored. */}
+              <span
+                className="cb-input cb-input--readonly"
+                aria-label={`Dose unit: ${unitPillLabel(formDoseUnit)}`}
               >
-                <option value="tablet">Tablet</option>
-                <option value="capsule">Capsule</option>
-                <option value="ml">ml</option>
-              </select>
+                {unitPillLabel(formDoseUnit)}
+              </span>
             </div>
           </div>
 

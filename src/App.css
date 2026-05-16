@@ -1548,6 +1548,17 @@
   border-color: var(--blueberry);
 }
 
+/* AK-129 — Read-only pill that visually matches .cb-input but reads as
+   non-interactive. Used for fields whose value is derived (e.g. dose unit
+   inherited from the cabinet item). */
+.cb-input--readonly {
+  background: var(--gray-50);
+  color: var(--gray-700);
+  cursor: default;
+  display: inline-flex;
+  align-items: center;
+}
+
 .cb-select {
   appearance: none;
   -webkit-appearance: none;
