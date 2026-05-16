@@ -158,6 +158,11 @@ export interface MasterMedicine {
   strength?: string | null
   dosageForm?: string | null
   activeIngredients?: string | null
+  // AK-125 — lowercased copy of `name` for case-insensitive prefix search.
+  // searchMasterDb queries this field; consumers ignore it. Optional because
+  // un-enriched docs predate the field; once the enrichment script runs
+  // against a corpus, every doc carries it.
+  nameLower?: string
 }
 
 // ── Treatments ────────────────────────────────────────────────

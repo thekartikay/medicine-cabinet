@@ -220,12 +220,19 @@ export function subscribeCabinetItems(
   )
 }
 
+// AK-125 \u2014 Case-insensitive prefix search against the masterDb catalogue.
+// The Firestore index is on `nameLower` (lowercased copy of `name`), so the
+// user typing "metformin", "Metformin", or "METFORMIN" all hit the same
+// prefix bucket. Returns the raw MasterMedicine \u2014 the display name field
+// is still `name`, not `nameLower`; the lowercased field is query-only.
 export async function searchMasterDb(queryStr: string): Promise<MasterMedicine[]> {
-  if (!queryStr.trim()) return []
+  const trimmed = queryStr.trim()
+  if (!trimmed) return []
+  const queryLower = trimmed.toLowerCase()
   const q = query(
     collection(db, 'masterDb'),
-    where('name', '>=', queryStr),
-    where('name', '<', queryStr + '\uf8ff'),
+    where('nameLower', '>=', queryLower),
+    where('nameLower', '<', queryLower + '\uf8ff'),
     limit(10),
   )
   const snap = await getDocs(q)

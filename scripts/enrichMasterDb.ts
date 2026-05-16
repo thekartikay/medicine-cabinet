@@ -116,9 +116,13 @@ async function enrich(db: Firestore): Promise<{ total: number; ok: number; fail:
         strength,
         dosageForm,
         activeIngredients: ingredient,
+        // AK-125 — Lowercased copy for case-insensitive prefix search.
+        // Stamped on every enrichment pass so re-runs keep nameLower in
+        // sync if a doc's `name` is ever edited out-of-band.
+        nameLower: name.toLowerCase(),
       })
       console.log(
-        `[enrichMasterDb] ${name} → brand=${brandName}, strength=${strength ?? 'null'}, form=${dosageForm}`,
+        `[enrichMasterDb] ${name} → brand=${brandName}, strength=${strength ?? 'null'}, form=${dosageForm}, lower=${name.toLowerCase()}`,
       )
       ok++
     } catch (e) {

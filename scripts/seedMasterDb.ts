@@ -220,7 +220,10 @@ async function seed(db: Firestore): Promise<{ written: number; total: number }> 
     const batch = db.batch()
     for (const med of slice) {
       const ref = db.collection('masterDb').doc(med.medicineId)
-      batch.set(ref, med, { merge: true })
+      // AK-125 — Stamp nameLower for case-insensitive prefix search.
+      // Spread med first so a future explicit nameLower in MEDICINES (none
+      // today) takes precedence, but in practice this is the source of truth.
+      batch.set(ref, { ...med, nameLower: med.name.toLowerCase() }, { merge: true })
     }
     await batch.commit()
     written += slice.length
