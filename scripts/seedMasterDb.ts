@@ -20,18 +20,27 @@
 import { initializeApp, getApps, type App } from 'firebase-admin/app'
 import { getFirestore, type Firestore } from 'firebase-admin/firestore'
 
-interface MasterMedicine {
+// Exported so enrichMasterDb.ts can import the curated list and look up
+// explicit overrides by medicineId.
+export interface MasterMedicine {
   medicineId: string
   name: string
   activeIngredient: string | null
+  // AK-148 — Optional explicit override. When present, enrichMasterDb skips
+  // its name-keyword inference and uses this value verbatim. Use sparingly,
+  // only for medicines whose `name` does not carry a form keyword
+  // (insulins, capsule-only multivitamins, name-less inhalers, etc.) or
+  // where the keyword inference is actively wrong (Digene Gel is an oral
+  // antacid, not a topical cream).
+  dosageForm?: string
 }
 
 // Curated list of common Indian-market medicines. The medicineId is stable so
 // the seed is idempotent across runs.
-const MEDICINES: MasterMedicine[] = [
+export const MEDICINES: MasterMedicine[] = [
   // ── Pain / fever / NSAIDs ───────────────────────────────────────────────
   { medicineId: 'crocin-500',         name: 'Crocin 500',          activeIngredient: 'Paracetamol 500mg' },
-  { medicineId: 'crocin-650',         name: 'Crocin 650',          activeIngredient: 'Paracetamol 650mg' },
+  { medicineId: 'crocin-650',         name: 'Crocin 650',          activeIngredient: 'Paracetamol 650mg',                                       dosageForm: 'tablet' },
   { medicineId: 'crocin-pain-relief', name: 'Crocin Pain Relief',  activeIngredient: 'Paracetamol + Caffeine' },
   { medicineId: 'dolo-650',           name: 'Dolo 650',            activeIngredient: 'Paracetamol 650mg' },
   { medicineId: 'dolo-500',           name: 'Dolo 500',            activeIngredient: 'Paracetamol 500mg' },
@@ -62,9 +71,9 @@ const MEDICINES: MasterMedicine[] = [
   { medicineId: 'amaryl-2',           name: 'Amaryl 2',            activeIngredient: 'Glimepiride 2mg' },
   { medicineId: 'galvus-50',          name: 'Galvus 50',           activeIngredient: 'Vildagliptin 50mg' },
   { medicineId: 'galvus-met',         name: 'Galvus Met',          activeIngredient: 'Vildagliptin + Metformin' },
-  { medicineId: 'lantus-pen',         name: 'Lantus SoloStar',     activeIngredient: 'Insulin Glargine' },
-  { medicineId: 'humalog',            name: 'Humalog',             activeIngredient: 'Insulin Lispro' },
-  { medicineId: 'mixtard-30',         name: 'Mixtard 30',          activeIngredient: 'Premix Insulin (NPH + Regular)' },
+  { medicineId: 'lantus-pen',         name: 'Lantus SoloStar',     activeIngredient: 'Insulin Glargine',                                        dosageForm: 'injection' },
+  { medicineId: 'humalog',            name: 'Humalog',             activeIngredient: 'Insulin Lispro',                                          dosageForm: 'injection' },
+  { medicineId: 'mixtard-30',         name: 'Mixtard 30',          activeIngredient: 'Premix Insulin (NPH + Regular)',                          dosageForm: 'injection' },
   { medicineId: 'pioglar-15',         name: 'Pioglar 15',          activeIngredient: 'Pioglitazone 15mg' },
 
   // ── Hypertension / cardiac ──────────────────────────────────────────────
@@ -127,9 +136,9 @@ const MEDICINES: MasterMedicine[] = [
   { medicineId: 'nexpro-40',          name: 'Nexpro 40',           activeIngredient: 'Esomeprazole 40mg' },
   { medicineId: 'aciloc-150',         name: 'Aciloc 150',          activeIngredient: 'Ranitidine 150mg' },
   { medicineId: 'zinetac-150',        name: 'Zinetac 150',         activeIngredient: 'Ranitidine 150mg' },
-  { medicineId: 'digene-gel',         name: 'Digene Gel',          activeIngredient: 'Magaldrate + Simethicone' },
+  { medicineId: 'digene-gel',         name: 'Digene Gel',          activeIngredient: 'Magaldrate + Simethicone',                                dosageForm: 'syrup' },
   { medicineId: 'digene-tablet',      name: 'Digene Tablet',       activeIngredient: 'Aluminium Hydroxide + Magnesium Hydroxide' },
-  { medicineId: 'eno-fruit-salt',     name: 'ENO Fruit Salt',      activeIngredient: 'Sodium Bicarbonate + Citric Acid' },
+  { medicineId: 'eno-fruit-salt',     name: 'ENO Fruit Salt',      activeIngredient: 'Sodium Bicarbonate + Citric Acid',                        dosageForm: 'powder' },
 
   // ── Allergy / antihistamine ─────────────────────────────────────────────
   { medicineId: 'cetzine-10',         name: 'Cetzine 10',          activeIngredient: 'Cetirizine 10mg' },
@@ -151,25 +160,25 @@ const MEDICINES: MasterMedicine[] = [
   { medicineId: 't-minic',            name: 'T-Minic',             activeIngredient: 'Phenylephrine + Chlorpheniramine' },
 
   // ── Vitamins / supplements ──────────────────────────────────────────────
-  { medicineId: 'becosules',          name: 'Becosules',           activeIngredient: 'B-complex with Vitamin C' },
-  { medicineId: 'becozinc',           name: 'Becozinc',            activeIngredient: 'B-complex + Zinc' },
+  { medicineId: 'becosules',          name: 'Becosules',           activeIngredient: 'B-complex with Vitamin C',                                dosageForm: 'capsule' },
+  { medicineId: 'becozinc',           name: 'Becozinc',            activeIngredient: 'B-complex + Zinc',                                        dosageForm: 'capsule' },
   { medicineId: 'neurobion-forte',    name: 'Neurobion Forte',     activeIngredient: 'Vitamin B1 + B6 + B12' },
   { medicineId: 'shelcal-500',        name: 'Shelcal 500',         activeIngredient: 'Calcium Carbonate 500mg + Vitamin D3' },
   { medicineId: 'calcium-sandoz',     name: 'Calcium Sandoz',      activeIngredient: 'Calcium Lactate Gluconate + Calcium Carbonate' },
-  { medicineId: 'calcirol',           name: 'Calcirol',            activeIngredient: 'Vitamin D3 60000 IU' },
-  { medicineId: 'uprise-d3',          name: 'Uprise D3',           activeIngredient: 'Vitamin D3 60000 IU' },
+  { medicineId: 'calcirol',           name: 'Calcirol',            activeIngredient: 'Vitamin D3 60000 IU',                                     dosageForm: 'powder' },
+  { medicineId: 'uprise-d3',          name: 'Uprise D3',           activeIngredient: 'Vitamin D3 60000 IU',                                     dosageForm: 'capsule' },
   { medicineId: 'limcee-500',         name: 'Limcee 500',          activeIngredient: 'Vitamin C 500mg' },
   { medicineId: 'folvite-5',          name: 'Folvite 5',           activeIngredient: 'Folic Acid 5mg' },
-  { medicineId: 'livogen',            name: 'Livogen',             activeIngredient: 'Iron + Folic Acid' },
+  { medicineId: 'livogen',            name: 'Livogen',             activeIngredient: 'Iron + Folic Acid',                                       dosageForm: 'capsule' },
   { medicineId: 'zincovit',           name: 'Zincovit',            activeIngredient: 'Multivitamin + Zinc' },
-  { medicineId: 'revital-h',          name: 'Revital H',           activeIngredient: 'Multivitamin + Ginseng' },
+  { medicineId: 'revital-h',          name: 'Revital H',           activeIngredient: 'Multivitamin + Ginseng',                                  dosageForm: 'capsule' },
 
   // ── Asthma / respiratory ────────────────────────────────────────────────
   { medicineId: 'asthalin-inhaler',   name: 'Asthalin Inhaler',    activeIngredient: 'Salbutamol' },
   { medicineId: 'levolin-inhaler',    name: 'Levolin Inhaler',     activeIngredient: 'Levosalbutamol' },
-  { medicineId: 'foracort-200',       name: 'Foracort 200',        activeIngredient: 'Formoterol + Budesonide 200mcg' },
-  { medicineId: 'seroflo-250',        name: 'Seroflo 250',         activeIngredient: 'Salmeterol + Fluticasone 250mcg' },
-  { medicineId: 'budecort',           name: 'Budecort',            activeIngredient: 'Budesonide' },
+  { medicineId: 'foracort-200',       name: 'Foracort 200',        activeIngredient: 'Formoterol + Budesonide 200mcg',                          dosageForm: 'inhaler' },
+  { medicineId: 'seroflo-250',        name: 'Seroflo 250',         activeIngredient: 'Salmeterol + Fluticasone 250mcg',                         dosageForm: 'inhaler' },
+  { medicineId: 'budecort',           name: 'Budecort',            activeIngredient: 'Budesonide',                                              dosageForm: 'inhaler' },
   { medicineId: 'duolin-inhaler',     name: 'Duolin Inhaler',      activeIngredient: 'Levosalbutamol + Ipratropium' },
 
   // ── Thyroid ─────────────────────────────────────────────────────────────
@@ -253,9 +262,16 @@ async function main(): Promise<void> {
 // Top-level await isn't ideal in CommonJS-shimmed environments; use a thenable
 // chain so process.exit fires deterministically and the process unblocks even
 // when firebase-admin keeps a gRPC connection alive in the background.
-main()
-  .then(() => process.exit(0))
-  .catch(err => {
-    console.error('[seedMasterDb] FAILED:', err)
-    process.exit(1)
-  })
+//
+// AK-148 — Only invoke main() when this module is the entry-point. Other
+// scripts (enrichMasterDb) now import { MEDICINES } from this file, and we
+// don't want the seed to fire as a side-effect of those imports.
+const isDirectInvocation = process.argv[1]?.endsWith('seedMasterDb.ts')
+if (isDirectInvocation) {
+  main()
+    .then(() => process.exit(0))
+    .catch(err => {
+      console.error('[seedMasterDb] FAILED:', err)
+      process.exit(1)
+    })
+}

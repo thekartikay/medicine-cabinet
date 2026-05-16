@@ -11,6 +11,15 @@
 
 import { initializeApp, getApps, type App } from 'firebase-admin/app'
 import { getFirestore, type Firestore } from 'firebase-admin/firestore'
+// AK-148 — Pull the curated seed list so enrichment can honour explicit
+// `dosageForm` overrides for medicines whose name doesn't carry a form
+// keyword (insulins, plain-name capsules, etc.) or where the keyword
+// inference is actively wrong (Digene Gel is an oral antacid).
+import { MEDICINES, type MasterMedicine } from './seedMasterDb'
+
+const SEED_BY_ID = new Map<string, MasterMedicine>(
+  MEDICINES.map(m => [m.medicineId, m]),
+)
 
 function ensureEnvironment(): void {
   const onEmulator = !!process.env.FIRESTORE_EMULATOR_HOST
@@ -110,7 +119,11 @@ async function enrich(db: Firestore): Promise<{ total: number; ok: number; fail:
     try {
       const brandName = extractBrandName(name)
       const strength = extractStrength(name, ingredient)
-      const dosageForm = extractDosageForm(name)
+      // AK-148 — Explicit seed override wins over name-keyword inference.
+      // This lets the curated list correct cases the heuristic gets wrong
+      // (insulins extract as 'tablet'; Digene Gel extracts as 'cream').
+      const seedEntry = SEED_BY_ID.get(docSnap.id)
+      const dosageForm = seedEntry?.dosageForm ?? extractDosageForm(name)
       await docSnap.ref.update({
         brandName,
         strength,
