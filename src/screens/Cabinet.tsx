@@ -39,6 +39,25 @@ interface Props {
   filterByPatientUid?: string
 }
 
+// AK-149 — Used both for the masterStillMatches save-time check (originally
+// AK-128) and for the render-time `masterLocked` derived value that gates the
+// read-only pill display for dosageForm / strength / unit. Trim, lowercase,
+// collapse internal whitespace so trivial casing/whitespace edits don't
+// unlock the fields.
+function normalizeBrand(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+// AK-149 — Mirror of unitPillLabel from Treatments.tsx (AK-129). Inlined here
+// rather than exported to avoid a cross-screen import. Singular title-case;
+// `ml` stays lowercase by convention; empty input falls back to em-dash so
+// the read-only pill never renders as a blank box.
+function unitPillLabel(unit: string): string {
+  if (!unit) return '—'
+  if (unit === 'ml') return 'ml'
+  return unit.charAt(0).toUpperCase() + unit.slice(1)
+}
+
 const DOSAGE_FORM_LABELS: Record<DosageForm, string> = {
   tablet:      'Tablet',
   capsule:     'Capsule',
@@ -191,6 +210,15 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   const [formPrescribed, setFormPrescribed] = useState(false)
   const [formLoading, setFormLoading] = useState(false)
   const [formError, setFormError] = useState('')
+
+  // AK-149 — Render-time derived: true when the user picked from masterDb
+  // AND hasn't edited the brand text away from the prefilled value. Locks
+  // dosageForm/strength/unit into read-only pills; reactive — the moment
+  // formBrand diverges from the master's name, this flips false and the
+  // fields become editable again. Same normalize() comparison the save
+  // handler uses to choose between selectedMaster.medicineId and the slug.
+  const masterLocked = !!selectedMaster
+    && normalizeBrand(formBrand) === normalizeBrand(selectedMaster.brandName ?? selectedMaster.name)
 
   // ── Read-only filter set: cabinetItem ids used in this user's treatments ──
   const [allowedItemIds, setAllowedItemIds] = useState<Set<string> | null>(null)
@@ -433,10 +461,7 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
     // and whitespace differences don't fragment the same medicine across
     // multiple cards. brandName below keeps the human-readable label.
     const trimmedBrand = formBrand.trim()
-    const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
-    const masterStillMatches = !!selectedMaster
-      && normalize(trimmedBrand) === normalize(selectedMaster.brandName ?? selectedMaster.name)
-    const resolvedMedicineId = masterStillMatches
+    const resolvedMedicineId = masterLocked
       ? selectedMaster!.medicineId
       : trimmedBrand.toLowerCase().replace(/\s+/g, '-')
     try {
@@ -630,51 +655,82 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
 
           <div className="cb-field-row">
             <div className="cb-field">
-              <label className="cb-label" htmlFor="cb-form">Dosage form</label>
-              <select
-                id="cb-form"
-                className="cb-input cb-select"
-                value={formDosageForm}
-                onChange={e => {
-                  const newForm = e.target.value as DosageForm
-                  setFormDosageForm(newForm)
-                  // AK-39 / catalog-enrichment — flip the count unit to the
-                  // sensible default for the new form (puff for inhaler, ml
-                  // for syrup, application for cream/ointment, etc.). User
-                  // can still override after.
-                  const suggested = suggestUnitForForm(newForm)
-                  if (suggested) setFormUnit(suggested)
-                }}
-              >
-                {(Object.keys(DOSAGE_FORM_LABELS) as DosageForm[]).map(f => (
-                  <option key={f} value={f}>{DOSAGE_FORM_LABELS[f]}</option>
-                ))}
-              </select>
+              {/* AK-149 — Locked to the masterDb pick when masterLocked is
+                  true; switches back to a regular <select> the moment the
+                  user edits the brand text away from the prefilled value. */}
+              {masterLocked ? (
+                <>
+                  <span className="cb-label">Dosage form</span>
+                  <span
+                    className="cb-input cb-input--readonly"
+                    aria-label={`Dosage form: ${DOSAGE_FORM_LABELS[formDosageForm]}`}
+                  >
+                    {DOSAGE_FORM_LABELS[formDosageForm]}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <label className="cb-label" htmlFor="cb-form">Dosage form</label>
+                  <select
+                    id="cb-form"
+                    className="cb-input cb-select"
+                    value={formDosageForm}
+                    onChange={e => {
+                      const newForm = e.target.value as DosageForm
+                      setFormDosageForm(newForm)
+                      // AK-39 / catalog-enrichment — flip the count unit to the
+                      // sensible default for the new form (puff for inhaler, ml
+                      // for syrup, application for cream/ointment, etc.). User
+                      // can still override after.
+                      const suggested = suggestUnitForForm(newForm)
+                      if (suggested) setFormUnit(suggested)
+                    }}
+                  >
+                    {(Object.keys(DOSAGE_FORM_LABELS) as DosageForm[]).map(f => (
+                      <option key={f} value={f}>{DOSAGE_FORM_LABELS[f]}</option>
+                    ))}
+                  </select>
+                </>
+              )}
             </div>
             <div className="cb-field">
-              <label className="cb-label" htmlFor="cb-strength-value">Strength</label>
-              <div className="cb-strength-row">
-                <input
-                  id="cb-strength-value"
-                  className="cb-input"
-                  type="text"
-                  inputMode="decimal"
-                  placeholder="e.g. 500"
-                  value={formStrengthValue}
-                  onChange={e => setFormStrengthValue(e.target.value)}
-                />
-                <select
-                  id="cb-strength-unit"
-                  className="cb-input cb-select"
-                  value={formStrengthUnit}
-                  onChange={e => setFormStrengthUnit(e.target.value as StrengthUnit)}
-                  aria-label="Strength unit"
-                >
-                  {STRENGTH_UNITS.map(u => (
-                    <option key={u} value={u}>{u}</option>
-                  ))}
-                </select>
-              </div>
+              {masterLocked ? (
+                <>
+                  <span className="cb-label">Strength</span>
+                  <span
+                    className="cb-input cb-input--readonly"
+                    aria-label={`Strength: ${formStrengthValue ? formStrengthValue + formStrengthUnit : 'not specified'}`}
+                  >
+                    {formStrengthValue ? `${formStrengthValue}${formStrengthUnit}` : '—'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <label className="cb-label" htmlFor="cb-strength-value">Strength</label>
+                  <div className="cb-strength-row">
+                    <input
+                      id="cb-strength-value"
+                      className="cb-input"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="e.g. 500"
+                      value={formStrengthValue}
+                      onChange={e => setFormStrengthValue(e.target.value)}
+                    />
+                    <select
+                      id="cb-strength-unit"
+                      className="cb-input cb-select"
+                      value={formStrengthUnit}
+                      onChange={e => setFormStrengthUnit(e.target.value as StrengthUnit)}
+                      aria-label="Strength unit"
+                    >
+                      {STRENGTH_UNITS.map(u => (
+                        <option key={u} value={u}>{u}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -693,28 +749,42 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
               />
             </div>
             <div className="cb-field">
-              <label className="cb-label" htmlFor="cb-unit">Unit type</label>
-              <select
-                id="cb-unit"
-                className="cb-input cb-select"
-                value={formUnit}
-                onChange={e => setFormUnit(e.target.value as CabinetItemUnit)}
-              >
-                {(Object.keys(UNIT_LABELS) as CabinetItemUnit[]).map(u => (
-                  <option key={u} value={u}>{UNIT_LABELS[u]}</option>
-                ))}
-              </select>
-              {formUnit === 'other' && (
-                <input
-                  id="cb-unit-custom"
-                  className="cb-input"
-                  type="text"
-                  placeholder="Type a unit (e.g. vial, sachet)"
-                  value={formCustomUnit}
-                  onChange={e => setFormCustomUnit(e.target.value)}
-                  aria-label="Custom unit"
-                  style={{ marginTop: 6 }}
-                />
+              {masterLocked ? (
+                <>
+                  <span className="cb-label">Unit type</span>
+                  <span
+                    className="cb-input cb-input--readonly"
+                    aria-label={`Unit type: ${unitPillLabel(formUnit)}`}
+                  >
+                    {unitPillLabel(formUnit)}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <label className="cb-label" htmlFor="cb-unit">Unit type</label>
+                  <select
+                    id="cb-unit"
+                    className="cb-input cb-select"
+                    value={formUnit}
+                    onChange={e => setFormUnit(e.target.value as CabinetItemUnit)}
+                  >
+                    {(Object.keys(UNIT_LABELS) as CabinetItemUnit[]).map(u => (
+                      <option key={u} value={u}>{UNIT_LABELS[u]}</option>
+                    ))}
+                  </select>
+                  {formUnit === 'other' && (
+                    <input
+                      id="cb-unit-custom"
+                      className="cb-input"
+                      type="text"
+                      placeholder="Type a unit (e.g. vial, sachet)"
+                      value={formCustomUnit}
+                      onChange={e => setFormCustomUnit(e.target.value)}
+                      aria-label="Custom unit"
+                      style={{ marginTop: 6 }}
+                    />
+                  )}
+                </>
               )}
             </div>
           </div>
