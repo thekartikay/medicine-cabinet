@@ -665,6 +665,26 @@ export async function logDose(
   })
 }
 
+// AK-137 — Count today's logs for a single PRN regimen. Drives the
+// "Taken today: N / cap" display and the disable-at-cap gate on the
+// dashboard's As-needed section. Cheap one-read per regimen — PRN logs
+// per regimen per day are bounded by maxDosesPerDay, which is single
+// digits in practice.
+export async function getPrnDosesToday(
+  hId: string,
+  tId: string,
+  rId: string,
+  dateStr: string,
+): Promise<number> {
+  const q = query(
+    collection(db, dosesCollectionPath(hId, tId)),
+    where('rId', '==', rId),
+    where('scheduledDate', '==', dateStr),
+  )
+  const snap = await getDocs(q)
+  return snap.size
+}
+
 // Admin override: mark a missed dose as taken on behalf of a member. Mirrors
 // logDose's transactional shape — single runTransaction for the log + debit
 // (CLAUDE.md rule 4) and respects the audit fence (rule 5). Idempotent: if

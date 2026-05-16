@@ -17,6 +17,7 @@ import {
   loadTodaysDoses,
   loadTodaysLogs,
   loadAllActiveRegimens,
+  getPrnDosesToday,
   logDose,
   adminMarkAsTaken,
   subscribeNotifications,
@@ -25,7 +26,7 @@ import {
 } from '../services/firestoreService'
 import type { TodaySummary } from '../types'
 import { NotificationsPanel } from './NotificationsPanel'
-import type { CabinetItem, DoseSlotDisplay, DoseStatus, FoodTiming, Notification } from '../types'
+import type { CabinetItem, DoseSlotDisplay, DoseStatus, FoodTiming, Notification, Regimen, Treatment } from '../types'
 import { CabinetTab } from './Cabinet'
 import { SettingsTab } from './Settings'
 import { TreatmentsTab } from './Treatments'
@@ -330,6 +331,12 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   // Map cabinetItemId → list of treatment names that depend on it. Used by
   // the stock-alerts section (Fix 1) to show "Affects: …" under OOS items.
   const [affectedByItem, setAffectedByItem] = useState<Record<string, string[]>>({})
+  // AK-137 — Keep the regimens + treatments instead of discarding them once
+  // affectedByItem is built. The PRN section needs the regimen list (filtered
+  // by scheduleType === 'as-needed') plus the treatment-name lookup. Single
+  // fetch covers both consumers.
+  const [allRegimens, setAllRegimens] = useState<Regimen[]>([])
+  const [allTreatments, setAllTreatments] = useState<Treatment[]>([])
   useEffect(() => {
     let cancelled = false
     loadAllActiveRegimens(household.hId)
@@ -338,19 +345,109 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
         const map: Record<string, string[]> = {}
         const treatNameByTId: Record<string, string> = {}
         for (const t of treatments) treatNameByTId[t.tId] = t.name
+        const flat: Regimen[] = []
         for (const [tId, regs] of Object.entries(regimensByTreatment)) {
           const name = treatNameByTId[tId]
-          if (!name) continue
           for (const r of regs) {
+            flat.push(r)
+            if (!name) continue
             if (!map[r.cabinetItemId]) map[r.cabinetItemId] = []
             if (!map[r.cabinetItemId].includes(name)) map[r.cabinetItemId].push(name)
           }
         }
         setAffectedByItem(map)
+        setAllTreatments(treatments)
+        setAllRegimens(flat)
       })
       .catch(() => { /* leave empty; UI just won't show affects line */ })
     return () => { cancelled = true }
-  }, [household.hId, todaysDoses.length])
+    // AK-137 — Re-fire only on household change. The previous trigger
+    // (todaysDoses.length) re-fetched the regimen tree every time a dose
+    // was logged, which has no bearing on the active-regimen set.
+  }, [household.hId])
+
+  // AK-137 — PRN section state. Derived view (prnRegimens) computed at render
+  // time. prnCountByRid holds today's logged-dose count per PRN regimen;
+  // populated by an effect that fans out one count read per PRN regimen.
+  // prnLoggingRid gates the "I took it" button during the in-flight write so
+  // the user can't double-tap.
+  const prnRegimens = allRegimens.filter(r => r.scheduleType === 'as-needed')
+  const [prnCountByRid, setPrnCountByRid] = useState<Record<string, number>>({})
+  const [prnLoggingRid, setPrnLoggingRid] = useState<string | null>(null)
+  const [prnError, setPrnError] = useState<string>('')
+  // The fetch key — refire when the *set* of PRN regimen IDs changes, not on
+  // every regimen object identity change.
+  const prnRidsKey = prnRegimens.map(r => r.rId).sort().join('|')
+  useEffect(() => {
+    if (prnRegimens.length === 0) return
+    let cancelled = false
+    const today = todayISTString()
+    Promise.all(
+      prnRegimens.map(r =>
+        getPrnDosesToday(household.hId, r.tId, r.rId, today)
+          .then(n => [r.rId, n] as const)
+          .catch(() => [r.rId, 0] as const),
+      ),
+    ).then(pairs => {
+      if (cancelled) return
+      setPrnCountByRid(Object.fromEntries(pairs))
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [household.hId, prnRidsKey])
+
+  // AK-137 — "I took it" handler. Stamps current IST HH:mm as the
+  // synthetic scheduledTime (per AK-137 design — slot ID collisions
+  // require two PRN doses in the same minute, well under maxDosesPerDay
+  // cadences). Goes through the existing logDose transaction so the
+  // inventory debit + audit-fence semantics are identical to scheduled
+  // doses.
+  async function handlePrnLog(regimen: Regimen) {
+    if (prnLoggingRid) return
+    // patientId on the log is the treatment's memberId — look it up so the
+    // log doc's patientId matches every other path that resolves it from
+    // the treatment, not the clicking admin.
+    const treatment = allTreatments.find(t => t.tId === regimen.tId)
+    if (!treatment) {
+      setPrnError('Could not find the treatment for this regimen.')
+      return
+    }
+    setPrnLoggingRid(regimen.rId)
+    setPrnError('')
+    try {
+      // IST HH:mm at click time. Two PRN logs in the same minute would
+      // collide on slotId; acceptable per AK-137 investigation (well
+      // below typical maxDosesPerDay cadences).
+      const istHHmm = new Date().toLocaleTimeString('en-IN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: 'Asia/Kolkata',
+      })
+      const today = todayISTString()
+      await logDose(household.hId, {
+        tId: regimen.tId,
+        rId: regimen.rId,
+        patientId: treatment.memberId,
+        cabinetItemId: regimen.cabinetItemId,
+        scheduledDate: today,
+        scheduledTime: istHHmm,
+        doseAmount: regimen.doseAmount,
+        doseUnit: regimen.doseUnit,
+        status: 'taken',
+        createdBy: user.uid,
+      })
+      // Re-fetch the count rather than blindly incrementing — keeps the UI
+      // honest if logDose hit an idempotent-existing-log path (rare for
+      // PRN but possible if two devices logged simultaneously).
+      const next = await getPrnDosesToday(household.hId, regimen.tId, regimen.rId, today)
+      setPrnCountByRid(prev => ({ ...prev, [regimen.rId]: next }))
+    } catch {
+      setPrnError('Could not record dose. Please try again.')
+    } finally {
+      setPrnLoggingRid(null)
+    }
+  }
 
   const displayName = user.displayName ?? user.phoneNumber ?? 'there'
   const initial = displayName.charAt(0).toUpperCase()
@@ -943,6 +1040,68 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                 View history →
               </button>
             </section>
+
+            {/* AK-137 — PRN regimens render as on-demand cards. Section is
+                hidden entirely when no PRN regimens exist (most households)
+                so the dashboard doesn't sprout an empty container. */}
+            {prnRegimens.length > 0 && (
+              <section className="db-section">
+                <h2 className="db-section-title">As needed</h2>
+                {prnError && <p className="cb-form-error" role="alert">{prnError}</p>}
+                <ul className="db-prn-list">
+                  {prnRegimens.map(r => {
+                    const treatment = allTreatments.find(t => t.tId === r.tId)
+                    const item = stockItems.find(s => s.iId === r.cabinetItemId)
+                    // Treat a missing item (disposed cabinet item still
+                    // referenced, or stockItems mid-fetch) the same as OOS so
+                    // the button never enables when we can't confirm stock.
+                    const outOfStock = !item || item.quantityOnHand <= 0
+                    const count = prnCountByRid[r.rId] ?? 0
+                    const atCap =
+                      typeof r.maxDosesPerDay === 'number' && count >= r.maxDosesPerDay
+                    const loading = prnLoggingRid === r.rId
+                    const disabled = loading || atCap || outOfStock
+                    const countLabel =
+                      typeof r.maxDosesPerDay === 'number'
+                        ? `Taken today: ${count} / ${r.maxDosesPerDay}`
+                        : `Taken today: ${count}`
+                    const unitSuffix =
+                      r.doseUnit === 'ml' || r.doseAmount === 1
+                        ? r.doseUnit
+                        : `${r.doseUnit}s`
+                    return (
+                      <li key={r.rId} className="db-card db-prn-card">
+                        <div className="db-prn-row">
+                          <span className="db-prn-name">{r.displayName}</span>
+                          {treatment?.memberName && (
+                            <span className="db-prn-member">{treatment.memberName}</span>
+                          )}
+                        </div>
+                        <p className="db-prn-dose">
+                          {r.doseAmount} {unitSuffix}{treatment?.name ? ` · ${treatment.name}` : ''}
+                        </p>
+                        <p className="db-prn-count">{countLabel}</p>
+                        <button
+                          type="button"
+                          className="db-prn-btn"
+                          onClick={() => handlePrnLog(r)}
+                          disabled={disabled}
+                          title={
+                            atCap
+                              ? `Daily limit reached (${r.maxDosesPerDay})`
+                              : outOfStock
+                                ? 'Out of stock'
+                                : undefined
+                          }
+                        >
+                          {loading ? 'Logging…' : atCap ? 'Daily limit reached' : outOfStock ? 'Out of stock' : 'I took it'}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </section>
+            )}
 
             <section className="db-section">
               <h2 className="db-section-title">Stock alerts</h2>
