@@ -373,7 +373,6 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   // treatments+logs query path when the summary doc doesn't yet exist (brand-
   // new household before the midnight cron has materialized it; the log
   // trigger will create it on the first dose write).
-  const [todaySummary, setTodaySummary] = useState<TodaySummary | null>(null)
   const [summaryLoaded, setSummaryLoaded] = useState(false)
 
   // Single coordinated effect for today's data:
@@ -464,7 +463,6 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
         if (cancelled) return
         summaryReceived = true
         setSummaryLoaded(true)
-        setTodaySummary(summary)
         if (summary) {
           // Tear down the fallback the instant we have authoritative data.
           stopFallback()
@@ -677,7 +675,12 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
           <>
             <section className="db-section">
               <h2 className="db-section-title">Today's doses</h2>
-              {summaryLoaded && !todaySummary && (
+              {/* AK-127 — Loading indicator shown only before the first
+                  todaySummary snapshot arrives. A snapshot returning null
+                  (today's fan-out doc not yet built) still counts as
+                  resolved — the fallback path takes over and there's
+                  nothing left to sync. */}
+              {!summaryLoaded && (
                 <p className="db-syncing-note" role="status">Syncing today's data…</p>
               )}
               {todaysDoses.length === 0 ? (
