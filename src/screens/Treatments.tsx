@@ -1539,7 +1539,7 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
                       <span className="tr-member-avatar" aria-hidden="true">
                         {(m.displayName ?? 'M').charAt(0).toUpperCase()}
                       </span>
-                      <span className="tr-member-name">{m.displayName ?? m.uid}</span>
+                      <span className="tr-member-name">{m.displayName ?? 'Unknown Member'}</span>
                       {active && <span className="tr-member-check" aria-hidden="true">✓</span>}
                     </button>
                   )

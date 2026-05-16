@@ -8,6 +8,8 @@ import {
   getUserDoc,
   getHousehold,
   getConsentRecord,
+  getMemberDisplayName,
+  syncMemberDisplayName,
 } from './services/firestoreService'
 import { SignIn } from './screens/SignIn'
 import { ChoosePath } from './screens/ChoosePath'
@@ -97,7 +99,25 @@ function App() {
       setRole(userRole)
       setAppState(hh ? 'dashboard' : 'choose-path')
 
-      if (hh) void requestNotificationPermission(firebaseUser.uid)
+      if (hh) {
+        void requestNotificationPermission(firebaseUser.uid)
+        // AK-153 — One-time self-heal for member docs that pre-date AK-117
+        // (their displayName was stamped from Auth before ProfileSetup ran).
+        // Fire-and-forget: the picker fallback covers the brief window before
+        // this completes, and a duplicate write is harmless if the backfill
+        // script already fixed this row.
+        void (async () => {
+          try {
+            const memberName = await getMemberDisplayName(hh.hId, firebaseUser.uid)
+            const authName = firebaseUser.displayName?.trim()
+            if ((!memberName || memberName.trim() === '') && authName) {
+              await syncMemberDisplayName(hh.hId, firebaseUser.uid, authName)
+            }
+          } catch {
+            // Self-heal is best-effort; nothing user-visible if it fails.
+          }
+        })()
+      }
     } catch {
       setUser(firebaseUser)
       setAppState('choose-path')

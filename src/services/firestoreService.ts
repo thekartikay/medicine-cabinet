@@ -826,6 +826,24 @@ export async function markAllNotificationsRead(
   await batch.commit()
 }
 
+// AK-153 — Fire-and-forget self-heal write. Called from App.tsx after
+// auth + household resolution when the loaded member doc has a null
+// displayName but the Firebase Auth user does carry one (typical for a
+// pre-AK-117 phone-OTP user who later completed ProfileSetup but whose
+// member doc was stamped before that — the denormalized copy never got
+// re-synced). Idempotent: callers gate on the null check, but a duplicate
+// write is harmless.
+export async function syncMemberDisplayName(
+  hId: string,
+  uid: string,
+  displayName: string,
+): Promise<void> {
+  await updateDoc(doc(db, memberPath(hId, uid)), {
+    displayName,
+    updatedAt: serverTimestamp(),
+  })
+}
+
 // Look up a household member's displayName. Used by Dashboard's "Updated by
 // [name]" lookup — the users/{uid} collection's read rule is self-only, so
 // we read from the household's members subcollection (read: isParticipant).
