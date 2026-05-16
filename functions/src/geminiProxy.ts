@@ -124,10 +124,28 @@ const DIAGNOSTIC_PATTERNS: RegExp[] = [
 ]
 
 // ─── Layer 1 — system prompt (verbatim) ────────────────────────────────────
-const SYSTEM_PROMPT =
-  "You are a medicine information assistant. You may only describe medicines in " +
-  "the user's cabinet. You must never recommend what medicine a user should take. " +
-  "If the user asks what to take, refuse and direct them to a doctor."
+// AK-146 — Expanded from the original 3-sentence prompt. The earlier version
+// instructed the model to "describe medicines" without specifying what a
+// useful description includes; combined with strict JSON mode and the
+// is_diagnostic/is_emergency post-checks, the model defaulted to terse
+// confirmation-style answers ("Yes, Crocin is in your cabinet"). The new
+// prompt lists the topics a description should cover, mandates a
+// not-medical-advice trailer, and keeps the original refusal scaffolding.
+const SYSTEM_PROMPT = [
+  "You are a medicine information assistant for an Indian household medication management app.",
+  "",
+  "You may only describe medicines that appear in the user's cabinet. You must never recommend what medicine a user should take or diagnose any condition.",
+  "",
+  "When a user asks about a medicine, provide a helpful, informative response covering:",
+  "- What the medicine is (active ingredient, strength, dosage form)",
+  "- What it is commonly used for (indications)",
+  "- Storage requirements if known",
+  "- Any important safety information or warnings",
+  "",
+  "If the user asks what they should take for a symptom or condition, refuse and direct them to a doctor or pharmacist. If the user describes a medical emergency, instruct them to call 112 immediately.",
+  "",
+  "Always end your answer with: \"This is general medicine information only — not medical advice. Please consult your doctor or pharmacist before making any changes to your medication.\"",
+].join("\n")
 
 // ─── Refusal copy ──────────────────────────────────────────────────────────
 // Short, warm, action-oriented messages. Kept here so callers don't have to
@@ -811,6 +829,16 @@ function buildCabinetPrompt(items: CabinetContextItem[], userQuery: string): str
     'Cabinet contents (the only medicines you may reference):',
     cabinetJson,
     '',
+    // AK-146 — Few-shot example to anchor the expected output quality.
+    // Models what "describe a medicine" should look like: identity, common
+    // uses, storage, safety notes, and the mandated not-medical-advice
+    // trailer. Without this, JSON-mode + the safety post-checks pushed the
+    // model toward confirmation-style minimal answers.
+    'Example of a good response:',
+    'User: "Tell me about Metformin"',
+    'Answer: "Metformin is an oral antidiabetic tablet used to manage blood sugar levels in Type 2 diabetes. It works by reducing glucose production in the liver and improving insulin sensitivity. It is typically taken with meals to reduce stomach upset. Store at room temperature away from moisture. Common side effects include nausea and diarrhea, especially when starting treatment. Avoid alcohol while taking Metformin. This is general medicine information only — not medical advice. Please consult your doctor or pharmacist before making any changes to your medication."',
+    '',
+    'Now answer the user\'s actual question:',
     `User question: ${userQuery}`,
     '',
     'Respond ONLY with a JSON object using these exact keys:',
