@@ -164,6 +164,12 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── manual / enrichment form state ─────────────────────────────
+  // AK-128 — Tracks the masterDb entry the user picked (if any) so the saved
+  // medicineId can carry the catalog's stable doc ID instead of the typed
+  // brand string. Cleared on resetForm; on save, only honoured when the
+  // brand text still matches what the picker prefilled (otherwise the user
+  // has edited toward a different medicine, so we slug instead).
+  const [selectedMaster, setSelectedMaster] = useState<MasterMedicine | null>(null)
   const [formBrand,   setFormBrand]   = useState('')
   const [formDosageForm, setFormDosageForm] = useState<DosageForm>('tablet')
   // AK-39 / catalog-enrichment — strength is now (numeric value, unit suffix).
@@ -311,6 +317,7 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   }, [searchQuery])
 
   function resetForm() {
+    setSelectedMaster(null)
     setFormBrand('')
     setFormDosageForm('tablet')
     setFormStrengthValue('')
@@ -347,6 +354,7 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   function startEnrich(prefillBrand = '', master?: MasterMedicine) {
     resetForm()
     if (master) {
+      setSelectedMaster(master)
       setFormBrand(master.brandName ?? master.name)
       if (master.strength) {
         const parsed = parseStrengthString(master.strength)
@@ -419,15 +427,27 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
       formUnit === 'other'
         ? ((formCustomUnit.trim() || 'other') as CabinetItemUnit)
         : formUnit
+    // AK-128 — medicineId is the grouping/identity key, not the display
+    // string. Prefer the masterDb doc id when the brand input still matches
+    // what the picker prefilled; otherwise slug the typed brand so casing
+    // and whitespace differences don't fragment the same medicine across
+    // multiple cards. brandName below keeps the human-readable label.
+    const trimmedBrand = formBrand.trim()
+    const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
+    const masterStillMatches = !!selectedMaster
+      && normalize(trimmedBrand) === normalize(selectedMaster.brandName ?? selectedMaster.name)
+    const resolvedMedicineId = masterStillMatches
+      ? selectedMaster!.medicineId
+      : trimmedBrand.toLowerCase().replace(/\s+/g, '-')
     try {
       const newIid = await addCabinetItem(hId, cId, {
-        medicineId: formBrand.trim(),
+        medicineId: resolvedMedicineId,
         displayNameOverride: null,
         quantityOnHand: parseInt(formQuantity, 10),
         unit: resolvedUnit,
         expiryDate: formExpiry || null,
         prescribed: formPrescribed,
-        brandName: formBrand.trim(),
+        brandName: trimmedBrand,
         dosageForm: formDosageForm,
         strength: strengthCombined,
         activeIngredients: formActiveIngr.trim() || null,
@@ -446,13 +466,13 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
         iId: newIid,
         cId: cabinetIdLocal,
         hId,
-        medicineId: formBrand.trim(),
+        medicineId: resolvedMedicineId,
         displayNameOverride: null,
         quantityOnHand: parseInt(formQuantity, 10),
         unit: resolvedUnit,
         expiryDate: formExpiry || null,
         prescribed: formPrescribed,
-        brandName: formBrand.trim(),
+        brandName: trimmedBrand,
         dosageForm: formDosageForm,
         strength: strengthCombined,
         activeIngredients: formActiveIngr.trim() || null,
@@ -805,9 +825,13 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
     ? items.filter(i => allowedItemIds.has(i.iId))
     : items
 
-  // Group items by (medicineId, prescribed). Each group renders as either a
-  // single card or a parent-with-batches card. Splitting on `prescribed` keeps
-  // a mixed-Rx/OTC supply for the same SKU honest in the Rx/OTC sections.
+  // Group items by (medicineId, strength, prescribed). Each group renders as
+  // either a single card or a parent-with-batches card. Splitting on
+  // `prescribed` keeps a mixed-Rx/OTC supply for the same SKU honest in the
+  // Rx/OTC sections. AK-128 — `strength` is part of the key so that "Crocin
+  // 500" and "Crocin 650" stay as separate cards even when a user typed both
+  // under the same brand label; an absent strength collapses to '' so older
+  // un-enriched items still group with each other.
   type Group = {
     key: string
     medicineId: string
@@ -817,7 +841,7 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   }
   const groupMap = new Map<string, Group>()
   for (const item of filteredItems) {
-    const key = `${item.medicineId}|${item.prescribed ? 'rx' : 'otc'}`
+    const key = `${item.medicineId}|${item.strength ?? ''}|${item.prescribed ? 'rx' : 'otc'}`
     let g = groupMap.get(key)
     if (!g) {
       g = { key, medicineId: item.medicineId, prescribed: item.prescribed, items: [], canonical: item }
