@@ -49,6 +49,7 @@ import type {
   CabinetItem,
   CabinetItemUnit,
   ConsentRecord,
+  DosageForm,
   DoseLog,
   DoseSlotDisplay,
   DoseStatus,
@@ -151,6 +152,9 @@ export async function addCabinetItem(
     activeIngredients?: string | null
     marketer?: string | null
     storageInstructions?: string | null
+    // AK-151 — Stable masterDb doc id when the item came from a catalog
+    // pick (AK-128 masterLocked path). Null/absent for free-text adds.
+    masterDbId?: string | null
   },
 ): Promise<string> {
   const iId = crypto.randomUUID()
@@ -186,6 +190,36 @@ export async function updateCabinetItemInteractionWarning(
       warning === null
         ? null
         : { ...warning, checkedAt: serverTimestamp() },
+    updatedAt: serverTimestamp(),
+  })
+}
+
+// AK-151 — Update a manually-added cabinet item from the detail-sheet
+// Edit flow. Restricted field set: only the values the edit form exposes
+// (brand/strength/dosage form/unit/quantity/expiry plus the optional
+// displayNameOverride). Anything else — masterDbId, prescribed,
+// medicineId, interactionWarning, createdAt, the enrichment-only fields
+// — is intentionally not accepted to keep this path narrow. updatedAt
+// is always stamped server-side. The grouping key (medicineId,
+// strength, prescribed) is partially mutable here: editing strength
+// will move the item between groups in the Cabinet list, which is
+// intentional (a 500mg → 650mg correction should re-bucket).
+export async function updateCabinetItem(
+  hId: string,
+  cId: string,
+  iId: string,
+  updates: {
+    displayNameOverride?: string | null
+    brandName?: string | null
+    strength?: string | null
+    dosageForm?: DosageForm | null
+    unit?: CabinetItemUnit
+    quantityOnHand?: number
+    expiryDate?: string | null
+  },
+): Promise<void> {
+  await updateDoc(doc(db, itemPath(hId, cId, iId)), {
+    ...updates,
     updatedAt: serverTimestamp(),
   })
 }

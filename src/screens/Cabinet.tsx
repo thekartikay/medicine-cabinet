@@ -10,6 +10,7 @@ import {
   updateRestockRequest,
   getHouseholdMembers,
   updateCabinetItemInteractionWarning,
+  updateCabinetItem,
   getActiveTreatmentsWithRegimensForMember,
   deleteCabinetItem,
 } from '../services/firestoreService'
@@ -29,7 +30,7 @@ import type {
 import { STRENGTH_UNITS } from '../types'
 import { timeAgo } from './NotificationsPanel'
 
-type CabinetView = 'list' | 'search' | 'enrich' | 'cabinet-details'
+type CabinetView = 'list' | 'search' | 'enrich' | 'cabinet-details' | 'edit'
 
 interface Props {
   hId: string
@@ -85,6 +86,13 @@ const UNIT_LABELS: Record<CabinetItemUnit, string> = {
   patch:       'Patches',
   other:       'Other (specify)',
 }
+
+// AK-151 — Used by startEdit to decide whether the saved unit should pre-fill
+// the dropdown (enum value) or the custom-unit text input (free-text saved
+// when the user picked 'other' at add time).
+const UNIT_ENUM_VALUES = new Set<CabinetItemUnit>(
+  Object.keys(UNIT_LABELS) as CabinetItemUnit[],
+)
 
 // AK-39 / catalog-enrichment — when the user picks a dosage form, suggest a
 // count unit that fits. The form-dropdown's onChange and the masterDb pre-fill
@@ -219,6 +227,15 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   // handler uses to choose between selectedMaster.medicineId and the slug.
   const masterLocked = !!selectedMaster
     && normalizeBrand(formBrand) === normalizeBrand(selectedMaster.brandName ?? selectedMaster.name)
+
+  // AK-151 — Edit-flow state. editingItem holds the original CabinetItem
+  // so handleEditSave can diff strength/unit/dosageForm to decide whether
+  // the affected-treatments warning fires. editConfirmOpen gates the
+  // warning modal between "Save" tap and the actual updateCabinetItem
+  // call.
+  const [editingItem, setEditingItem] = useState<CabinetItem | null>(null)
+  const [editConfirmOpen, setEditConfirmOpen] = useState(false)
+  const [editAffectedTreatments, setEditAffectedTreatments] = useState<Treatment[]>([])
 
   // ── Read-only filter set: cabinetItem ids used in this user's treatments ──
   const [allowedItemIds, setAllowedItemIds] = useState<Set<string> | null>(null)
@@ -369,6 +386,129 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
     setView('list')
   }
 
+  // AK-151 — Pre-populate the form state from a manually-added item and
+  // switch to the edit view. The edit view reuses the same form-state
+  // hooks the add flow uses (formBrand, formStrengthValue, etc.), so
+  // pre-filling them is enough to put the form into "editing this item"
+  // mode. editingItem holds the original snapshot for the diff in
+  // handleEditSave.
+  function startEdit(item: CabinetItem) {
+    resetForm()
+    setEditingItem(item)
+    setFormBrand(item.brandName ?? item.medicineId)
+    if (item.strength) {
+      const parsed = parseStrengthString(item.strength)
+      if (parsed) {
+        setFormStrengthValue(parsed.value)
+        setFormStrengthUnit(parsed.unit)
+      } else {
+        setFormStrengthValue(item.strength)
+      }
+    }
+    if (item.dosageForm && ALLOWED_DOSAGE_FORMS.includes(item.dosageForm as DosageForm)) {
+      setFormDosageForm(item.dosageForm as DosageForm)
+    }
+    // The saved unit may be the literal 'other' sentinel, an enum member,
+    // or a free-text custom unit (cast to CabinetItemUnit at add time).
+    // Choose dropdown vs custom input based on enum membership.
+    if (UNIT_ENUM_VALUES.has(item.unit)) {
+      setFormUnit(item.unit)
+    } else {
+      setFormUnit('other')
+      setFormCustomUnit(item.unit)
+    }
+    setFormQuantity(String(item.quantityOnHand))
+    setFormExpiry(item.expiryDate ?? '')
+    setFormPrescribed(item.prescribed)
+    setSelectedGroupKey(null)
+    setView('edit')
+  }
+
+  function cancelEdit() {
+    setEditingItem(null)
+    setEditConfirmOpen(false)
+    setEditAffectedTreatments([])
+    resetForm()
+    setView('list')
+  }
+
+  // Handles "Save" tap in the edit view. Validates required fields,
+  // runs the field-aware affected-treatments check, and either fires
+  // the warning modal or saves directly.
+  async function handleEditSave() {
+    if (!editingItem || !cId) return
+    if (!formBrand.trim())    { setFormError('Brand name is required.');   return }
+    const qty = parseInt(formQuantity, 10)
+    if (!formQuantity || isNaN(qty) || qty < 0) {
+      setFormError('Enter a valid quantity.'); return
+    }
+    if (!formExpiry) { setFormError('Expiry date is required.'); return }
+    setFormError('')
+
+    const trimmedStrengthValue = formStrengthValue.trim()
+    const newStrength = trimmedStrengthValue
+      ? `${trimmedStrengthValue}${formStrengthUnit}`
+      : null
+    const newUnit: CabinetItemUnit =
+      formUnit === 'other'
+        ? ((formCustomUnit.trim() || 'other') as CabinetItemUnit)
+        : formUnit
+
+    // AK-151 — Field-aware warning: only strength/unit/dosageForm changes
+    // can desync downstream Regimen/DoseLog records (those fields were
+    // snapshotted from the cabinet at regimen create time). Name, expiry,
+    // and quantity edits don't touch the dose record.
+    const strengthChanged = newStrength !== (editingItem.strength ?? null)
+    const unitChanged = newUnit !== editingItem.unit
+    const dosageFormChanged = formDosageForm !== (editingItem.dosageForm ?? 'tablet')
+    const desyncRisk = strengthChanged || unitChanged || dosageFormChanged
+
+    if (desyncRisk) {
+      const affected = treatmentsUsingItem(editingItem.iId)
+      if (affected.length > 0) {
+        setEditAffectedTreatments(affected)
+        setEditConfirmOpen(true)
+        return
+      }
+    }
+    await commitEdit(newStrength, newUnit)
+  }
+
+  async function commitEdit(strength: string | null, unit: CabinetItemUnit) {
+    if (!editingItem || !cId) return
+    setFormLoading(true)
+    try {
+      await updateCabinetItem(hId, cId, editingItem.iId, {
+        brandName: formBrand.trim(),
+        strength,
+        dosageForm: formDosageForm,
+        unit,
+        quantityOnHand: parseInt(formQuantity, 10),
+        expiryDate: formExpiry || null,
+      })
+      // Subscription will pick up the change.
+      cancelEdit()
+    } catch {
+      setFormError('Could not save changes. Please try again.')
+    } finally {
+      setFormLoading(false)
+    }
+  }
+
+  // Triggered from the warning modal's "Continue" button.
+  async function confirmEditAndSave() {
+    setEditConfirmOpen(false)
+    const trimmedStrengthValue = formStrengthValue.trim()
+    const newStrength = trimmedStrengthValue
+      ? `${trimmedStrengthValue}${formStrengthUnit}`
+      : null
+    const newUnit: CabinetItemUnit =
+      formUnit === 'other'
+        ? ((formCustomUnit.trim() || 'other') as CabinetItemUnit)
+        : formUnit
+    await commitEdit(newStrength, newUnit)
+  }
+
   function openSearch() {
     setSearchQuery('')
     setSearchResults([])
@@ -478,6 +618,10 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
         activeIngredients: formActiveIngr.trim() || null,
         marketer: formMarketer.trim() || null,
         storageInstructions: formStorage.trim() || null,
+        // AK-151 — Catalog reference; null when free-text typed. Drives
+        // the detail-sheet Edit gate (only items with masterDbId == null
+        // are user-editable).
+        masterDbId: masterLocked ? selectedMaster!.medicineId : null,
       })
       // The subscribeCabinetItems listener installed on mount will pick up the
       // new doc and re-set items state automatically — no manual refetch.
@@ -503,6 +647,7 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
         activeIngredients: formActiveIngr.trim() || null,
         marketer: formMarketer.trim() || null,
         storageInstructions: formStorage.trim() || null,
+        masterDbId: masterLocked ? selectedMaster!.medicineId : null,
       } as CabinetItem
 
       // AK-39 — Passive check against other items already in the cabinet.
@@ -845,6 +990,200 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
     )
   }
 
+  // ── Edit (AK-151) ─────────────────────────────────────────────────
+  // Reuses the same form-state hooks as the add flow. medicineId and
+  // prescribed are shown as locked pills (per spec); brand/strength/
+  // dosage form/unit/quantity/expiry are editable. Save runs the
+  // field-aware affected-treatments check.
+  if (view === 'edit' && editingItem) {
+    return (
+      <div className="cb-view">
+        <div className="cb-subheader">
+          <button className="cb-back-btn" onClick={cancelEdit} aria-label="Back">
+            <BackIcon />
+          </button>
+          <h2 className="cb-page-title">Edit medicine</h2>
+        </div>
+
+        <div className="cb-form">
+          <div className="cb-field">
+            <span className="cb-label">Medicine ID</span>
+            <span
+              className="cb-input cb-input--readonly"
+              aria-label={`Medicine ID: ${editingItem.medicineId}`}
+            >
+              {editingItem.medicineId}
+            </span>
+          </div>
+
+          <div className="cb-field">
+            <label className="cb-label" htmlFor="cb-edit-brand">Brand name</label>
+            <input
+              id="cb-edit-brand"
+              className="cb-input"
+              type="text"
+              value={formBrand}
+              onChange={e => setFormBrand(e.target.value)}
+            />
+          </div>
+
+          <div className="cb-field-row">
+            <div className="cb-field">
+              <label className="cb-label" htmlFor="cb-edit-form">Dosage form</label>
+              <select
+                id="cb-edit-form"
+                className="cb-input cb-select"
+                value={formDosageForm}
+                onChange={e => setFormDosageForm(e.target.value as DosageForm)}
+              >
+                {(Object.keys(DOSAGE_FORM_LABELS) as DosageForm[]).map(f => (
+                  <option key={f} value={f}>{DOSAGE_FORM_LABELS[f]}</option>
+                ))}
+              </select>
+            </div>
+            <div className="cb-field">
+              <label className="cb-label" htmlFor="cb-edit-strength-value">Strength</label>
+              <div className="cb-strength-row">
+                <input
+                  id="cb-edit-strength-value"
+                  className="cb-input"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="e.g. 500"
+                  value={formStrengthValue}
+                  onChange={e => setFormStrengthValue(e.target.value)}
+                />
+                <select
+                  id="cb-edit-strength-unit"
+                  className="cb-input cb-select"
+                  value={formStrengthUnit}
+                  onChange={e => setFormStrengthUnit(e.target.value as StrengthUnit)}
+                  aria-label="Strength unit"
+                >
+                  {STRENGTH_UNITS.map(u => (
+                    <option key={u} value={u}>{u}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="cb-field-row">
+            <div className="cb-field">
+              <label className="cb-label" htmlFor="cb-edit-qty">Quantity</label>
+              <input
+                id="cb-edit-qty"
+                className="cb-input"
+                type="number"
+                inputMode="numeric"
+                min="0"
+                value={formQuantity}
+                onChange={e => setFormQuantity(e.target.value)}
+              />
+            </div>
+            <div className="cb-field">
+              <label className="cb-label" htmlFor="cb-edit-unit">Unit type</label>
+              <select
+                id="cb-edit-unit"
+                className="cb-input cb-select"
+                value={formUnit}
+                onChange={e => setFormUnit(e.target.value as CabinetItemUnit)}
+              >
+                {(Object.keys(UNIT_LABELS) as CabinetItemUnit[]).map(u => (
+                  <option key={u} value={u}>{UNIT_LABELS[u]}</option>
+                ))}
+              </select>
+              {formUnit === 'other' && (
+                <input
+                  id="cb-edit-unit-custom"
+                  className="cb-input"
+                  type="text"
+                  placeholder="Type a unit (e.g. vial, sachet)"
+                  value={formCustomUnit}
+                  onChange={e => setFormCustomUnit(e.target.value)}
+                  aria-label="Custom unit"
+                  style={{ marginTop: 6 }}
+                />
+              )}
+            </div>
+          </div>
+
+          <div className="cb-field">
+            <label className="cb-label" htmlFor="cb-edit-expiry">Expiry date</label>
+            <input
+              id="cb-edit-expiry"
+              className="cb-input"
+              type="date"
+              value={formExpiry}
+              onChange={e => setFormExpiry(e.target.value)}
+            />
+          </div>
+
+          <div className="cb-field">
+            <span className="cb-label">Prescription type</span>
+            <span
+              className="cb-input cb-input--readonly"
+              aria-label={`Prescription type: ${editingItem.prescribed ? 'Prescription (Rx)' : 'Over the counter (OTC)'}`}
+            >
+              {editingItem.prescribed ? 'Prescription (Rx)' : 'Over the counter (OTC)'}
+            </span>
+          </div>
+
+          {formError && <p className="cb-form-error" role="alert">{formError}</p>}
+
+          <button
+            className="cb-submit-btn"
+            onClick={handleEditSave}
+            disabled={formLoading}
+          >
+            {formLoading ? 'Saving…' : 'Save changes'}
+          </button>
+          <button className="cb-cancel-btn" onClick={cancelEdit}>Cancel</button>
+        </div>
+
+        {/* AK-151 — Field-aware affected-treatments warning. Fires only when
+            strength / unit / dosageForm changed AND active treatments
+            reference this item. */}
+        {editConfirmOpen && (
+          <div
+            className="bs-overlay"
+            onClick={() => setEditConfirmOpen(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-confirm-title"
+          >
+            <div className="bs-sheet" onClick={e => e.stopPropagation()}>
+              <span className="bs-handle" aria-hidden="true" />
+              <h2 id="edit-confirm-title" className="bs-title">Affected treatments</h2>
+              <p style={{ marginTop: 8 }}>
+                {editAffectedTreatments.length === 1
+                  ? `${editAffectedTreatments[0].name} uses this medicine.`
+                  : `${editAffectedTreatments.length} treatments use this medicine: ${editAffectedTreatments.map(t => t.name).join(', ')}.`}
+                {' '}Changing strength, unit, or dosage form may desync its dose records. Continue?
+              </p>
+              <div className="bs-actions" style={{ marginTop: 16 }}>
+                <button
+                  type="button"
+                  className="bs-btn bs-btn--secondary"
+                  onClick={() => setEditConfirmOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="bs-btn bs-btn--primary"
+                  onClick={confirmEditAndSave}
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   // ── Cabinet details (target cabinet + Rx toggle) ──────────────────
   if (view === 'cabinet-details') {
     return (
@@ -1026,11 +1365,31 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
           </section>
 
           <div className="bs-actions">
-            {!readOnly && (
-              <button type="button" className="bs-btn bs-btn--secondary" disabled>
-                Edit
-              </button>
-            )}
+            {!readOnly && (() => {
+              // AK-151 — Edit gating. The bottom sheet shows a group; we can
+              // only edit when the group has a single batch (multi-batch
+              // editing isn't a supported flow yet) AND that batch was
+              // manually added (masterDb-picked items are catalog-locked).
+              const isSingleBatch = group.items.length === 1
+              const isManualAdd = !c.masterDbId
+              const editable = isSingleBatch && isManualAdd
+              const disabledReason = !isSingleBatch
+                ? 'Multi-batch groups cannot be edited from here.'
+                : !isManualAdd
+                  ? 'Catalog medicines cannot be edited.'
+                  : undefined
+              return (
+                <button
+                  type="button"
+                  className="bs-btn bs-btn--secondary"
+                  disabled={!editable}
+                  title={disabledReason}
+                  onClick={editable ? () => startEdit(group.items[0]) : undefined}
+                >
+                  Edit
+                </button>
+              )
+            })()}
             <button
               type="button"
               className="bs-btn bs-btn--primary"

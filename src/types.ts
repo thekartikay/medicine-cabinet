@@ -132,6 +132,14 @@ export interface CabinetItem {
   activeIngredients?: string | null
   marketer?: string | null
   storageInstructions?: string | null
+  // AK-151 — Stamped at add time when the user picked from the masterDb
+  // autocomplete (the AK-128 masterLocked path). Absent/null means the
+  // item was free-text typed; only those items are editable from the
+  // detail-sheet Edit flow. Older items predating AK-151 read as
+  // undefined and default to editable, which is acceptable: the values
+  // were always free-form anyway and there's no catalog data to
+  // accidentally overwrite.
+  masterDbId?: string | null
   createdAt: Timestamp
   updatedAt: Timestamp
   // AK-39 — Passive interaction tag. Stamped by a background check after the
