@@ -33,6 +33,17 @@ export interface MasterMedicine {
   // where the keyword inference is actively wrong (Digene Gel is an oral
   // antacid, not a topical cream).
   dosageForm?: string
+  // AK-152 — Optional explicit strength override. extractStrength picks the
+  // first number in the name and pairs it with the first matching unit in
+  // the activeIngredient string, which silently truncates combo
+  // formulations (e.g. "Janumet 50/500" → "50mg") and invents bogus
+  // values for ratio-named or marketing-sum names (e.g. Mixtard 30 →
+  // "30mg", Augmentin 625 → "625mg" though no ingredient is 625mg).
+  // When set, enrichMasterDb skips its inference. Distinct from
+  // dosageForm in that `null` IS a valid override here (Mixtard 30 has
+  // no meaningful per-dose mg value) — so the enrichment check uses
+  // `!== undefined`, not `??`.
+  strength?: string | null
 }
 
 // Curated list of common Indian-market medicines. The medicineId is stable so
@@ -48,7 +59,7 @@ export const MEDICINES: MasterMedicine[] = [
   { medicineId: 'calpol-650',         name: 'Calpol 650',          activeIngredient: 'Paracetamol 650mg' },
   { medicineId: 'paracip-500',        name: 'Paracip 500',         activeIngredient: 'Paracetamol 500mg' },
   { medicineId: 'p-250',              name: 'P 250',               activeIngredient: 'Paracetamol 250mg (paediatric)' },
-  { medicineId: 'combiflam',          name: 'Combiflam',           activeIngredient: 'Ibuprofen 400mg + Paracetamol 325mg' },
+  { medicineId: 'combiflam',          name: 'Combiflam',           activeIngredient: 'Ibuprofen 400mg + Paracetamol 325mg',                     strength: '400mg + 325mg' },
   { medicineId: 'brufen-400',         name: 'Brufen 400',          activeIngredient: 'Ibuprofen 400mg' },
   { medicineId: 'brufen-600',         name: 'Brufen 600',          activeIngredient: 'Ibuprofen 600mg' },
   { medicineId: 'disprin',            name: 'Disprin',             activeIngredient: 'Aspirin 350mg' },
@@ -63,17 +74,17 @@ export const MEDICINES: MasterMedicine[] = [
   // ── Diabetes ────────────────────────────────────────────────────────────
   { medicineId: 'glycomet-500',       name: 'Glycomet 500',        activeIngredient: 'Metformin 500mg' },
   { medicineId: 'glycomet-850',       name: 'Glycomet 850',        activeIngredient: 'Metformin 850mg' },
-  { medicineId: 'glycomet-gp1',       name: 'Glycomet GP1',        activeIngredient: 'Metformin + Glimepiride 1mg' },
-  { medicineId: 'glycomet-gp2',       name: 'Glycomet GP2',        activeIngredient: 'Metformin + Glimepiride 2mg' },
-  { medicineId: 'janumet-50-500',     name: 'Janumet 50/500',      activeIngredient: 'Sitagliptin 50mg + Metformin 500mg' },
-  { medicineId: 'janumet-50-1000',    name: 'Janumet 50/1000',     activeIngredient: 'Sitagliptin 50mg + Metformin 1000mg' },
+  { medicineId: 'glycomet-gp1',       name: 'Glycomet GP1',        activeIngredient: 'Metformin + Glimepiride 1mg',                             strength: '500mg + 1mg' },
+  { medicineId: 'glycomet-gp2',       name: 'Glycomet GP2',        activeIngredient: 'Metformin + Glimepiride 2mg',                             strength: '500mg + 2mg' },
+  { medicineId: 'janumet-50-500',     name: 'Janumet 50/500',      activeIngredient: 'Sitagliptin 50mg + Metformin 500mg',                      strength: '50mg + 500mg' },
+  { medicineId: 'janumet-50-1000',    name: 'Janumet 50/1000',     activeIngredient: 'Sitagliptin 50mg + Metformin 1000mg',                     strength: '50mg + 1000mg' },
   { medicineId: 'amaryl-1',           name: 'Amaryl 1',            activeIngredient: 'Glimepiride 1mg' },
   { medicineId: 'amaryl-2',           name: 'Amaryl 2',            activeIngredient: 'Glimepiride 2mg' },
   { medicineId: 'galvus-50',          name: 'Galvus 50',           activeIngredient: 'Vildagliptin 50mg' },
   { medicineId: 'galvus-met',         name: 'Galvus Met',          activeIngredient: 'Vildagliptin + Metformin' },
   { medicineId: 'lantus-pen',         name: 'Lantus SoloStar',     activeIngredient: 'Insulin Glargine',                                        dosageForm: 'injection' },
   { medicineId: 'humalog',            name: 'Humalog',             activeIngredient: 'Insulin Lispro',                                          dosageForm: 'injection' },
-  { medicineId: 'mixtard-30',         name: 'Mixtard 30',          activeIngredient: 'Premix Insulin (NPH + Regular)',                          dosageForm: 'injection' },
+  { medicineId: 'mixtard-30',         name: 'Mixtard 30',          activeIngredient: 'Premix Insulin (NPH + Regular)',                          dosageForm: 'injection', strength: null },
   { medicineId: 'pioglar-15',         name: 'Pioglar 15',          activeIngredient: 'Pioglitazone 15mg' },
 
   // ── Hypertension / cardiac ──────────────────────────────────────────────
@@ -96,7 +107,7 @@ export const MEDICINES: MasterMedicine[] = [
   { medicineId: 'lasix-40',           name: 'Lasix 40',            activeIngredient: 'Furosemide 40mg' },
   { medicineId: 'ecosprin-75',        name: 'Ecosprin 75',         activeIngredient: 'Aspirin 75mg' },
   { medicineId: 'ecosprin-150',       name: 'Ecosprin 150',        activeIngredient: 'Aspirin 150mg' },
-  { medicineId: 'ecosprin-av-75',     name: 'Ecosprin AV 75',      activeIngredient: 'Aspirin 75mg + Atorvastatin 10mg' },
+  { medicineId: 'ecosprin-av-75',     name: 'Ecosprin AV 75',      activeIngredient: 'Aspirin 75mg + Atorvastatin 10mg',                        strength: '75mg + 10mg' },
   { medicineId: 'clopilet-75',        name: 'Clopilet 75',         activeIngredient: 'Clopidogrel 75mg' },
   { medicineId: 'plavix-75',          name: 'Plavix 75',           activeIngredient: 'Clopidogrel 75mg' },
   { medicineId: 'sorbitrate-10',      name: 'Sorbitrate 10',       activeIngredient: 'Isosorbide Dinitrate 10mg' },
@@ -113,8 +124,8 @@ export const MEDICINES: MasterMedicine[] = [
 
   // ── Antibiotics ─────────────────────────────────────────────────────────
   { medicineId: 'mox-500',            name: 'Mox 500',             activeIngredient: 'Amoxicillin 500mg' },
-  { medicineId: 'augmentin-625',      name: 'Augmentin 625',       activeIngredient: 'Amoxicillin 500mg + Clavulanic Acid 125mg' },
-  { medicineId: 'clavam-625',         name: 'Clavam 625',          activeIngredient: 'Amoxicillin 500mg + Clavulanic Acid 125mg' },
+  { medicineId: 'augmentin-625',      name: 'Augmentin 625',       activeIngredient: 'Amoxicillin 500mg + Clavulanic Acid 125mg',               strength: '500mg + 125mg' },
+  { medicineId: 'clavam-625',         name: 'Clavam 625',          activeIngredient: 'Amoxicillin 500mg + Clavulanic Acid 125mg',               strength: '500mg + 125mg' },
   { medicineId: 'azee-500',           name: 'Azee 500',            activeIngredient: 'Azithromycin 500mg' },
   { medicineId: 'azithral-500',       name: 'Azithral 500',        activeIngredient: 'Azithromycin 500mg' },
   { medicineId: 'taxim-o-200',        name: 'Taxim-O 200',         activeIngredient: 'Cefixime 200mg' },
@@ -124,11 +135,11 @@ export const MEDICINES: MasterMedicine[] = [
   { medicineId: 'doxy-100',           name: 'Doxy 100',            activeIngredient: 'Doxycycline 100mg' },
   { medicineId: 'flagyl-400',         name: 'Flagyl 400',          activeIngredient: 'Metronidazole 400mg' },
   { medicineId: 'metrogyl-400',       name: 'Metrogyl 400',        activeIngredient: 'Metronidazole 400mg' },
-  { medicineId: 'septran-ds',         name: 'Septran DS',          activeIngredient: 'Sulfamethoxazole 800mg + Trimethoprim 160mg' },
+  { medicineId: 'septran-ds',         name: 'Septran DS',          activeIngredient: 'Sulfamethoxazole 800mg + Trimethoprim 160mg',             strength: '800mg + 160mg' },
   { medicineId: 'roxid-150',          name: 'Roxid 150',           activeIngredient: 'Roxithromycin 150mg' },
 
   // ── GI / antacid / PPI ──────────────────────────────────────────────────
-  { medicineId: 'pan-d',              name: 'Pan-D',               activeIngredient: 'Pantoprazole 40mg + Domperidone 30mg' },
+  { medicineId: 'pan-d',              name: 'Pan-D',               activeIngredient: 'Pantoprazole 40mg + Domperidone 30mg',                    strength: '40mg + 30mg' },
   { medicineId: 'pan-40',             name: 'Pan 40',              activeIngredient: 'Pantoprazole 40mg' },
   { medicineId: 'omez-20',            name: 'Omez 20',             activeIngredient: 'Omeprazole 20mg' },
   { medicineId: 'omez-d',             name: 'Omez D',              activeIngredient: 'Omeprazole + Domperidone' },
@@ -146,7 +157,7 @@ export const MEDICINES: MasterMedicine[] = [
   { medicineId: 'allegra-180',        name: 'Allegra 180',         activeIngredient: 'Fexofenadine 180mg' },
   { medicineId: 'levoset-5',          name: 'Levoset 5',           activeIngredient: 'Levocetirizine 5mg' },
   { medicineId: 'avil-25',            name: 'Avil 25',             activeIngredient: 'Pheniramine Maleate 25mg' },
-  { medicineId: 'montair-lc',         name: 'Montair LC',          activeIngredient: 'Montelukast 10mg + Levocetirizine 5mg' },
+  { medicineId: 'montair-lc',         name: 'Montair LC',          activeIngredient: 'Montelukast 10mg + Levocetirizine 5mg',                   strength: '10mg + 5mg' },
   { medicineId: 'monticope',          name: 'Monticope',           activeIngredient: 'Montelukast + Levocetirizine' },
 
   // ── Cough / cold ────────────────────────────────────────────────────────
@@ -163,7 +174,7 @@ export const MEDICINES: MasterMedicine[] = [
   { medicineId: 'becosules',          name: 'Becosules',           activeIngredient: 'B-complex with Vitamin C',                                dosageForm: 'capsule' },
   { medicineId: 'becozinc',           name: 'Becozinc',            activeIngredient: 'B-complex + Zinc',                                        dosageForm: 'capsule' },
   { medicineId: 'neurobion-forte',    name: 'Neurobion Forte',     activeIngredient: 'Vitamin B1 + B6 + B12' },
-  { medicineId: 'shelcal-500',        name: 'Shelcal 500',         activeIngredient: 'Calcium Carbonate 500mg + Vitamin D3' },
+  { medicineId: 'shelcal-500',        name: 'Shelcal 500',         activeIngredient: 'Calcium Carbonate 500mg + Vitamin D3',                    strength: '500mg' },
   { medicineId: 'calcium-sandoz',     name: 'Calcium Sandoz',      activeIngredient: 'Calcium Lactate Gluconate + Calcium Carbonate' },
   { medicineId: 'calcirol',           name: 'Calcirol',            activeIngredient: 'Vitamin D3 60000 IU',                                     dosageForm: 'powder' },
   { medicineId: 'uprise-d3',          name: 'Uprise D3',           activeIngredient: 'Vitamin D3 60000 IU',                                     dosageForm: 'capsule' },
@@ -176,8 +187,8 @@ export const MEDICINES: MasterMedicine[] = [
   // ── Asthma / respiratory ────────────────────────────────────────────────
   { medicineId: 'asthalin-inhaler',   name: 'Asthalin Inhaler',    activeIngredient: 'Salbutamol' },
   { medicineId: 'levolin-inhaler',    name: 'Levolin Inhaler',     activeIngredient: 'Levosalbutamol' },
-  { medicineId: 'foracort-200',       name: 'Foracort 200',        activeIngredient: 'Formoterol + Budesonide 200mcg',                          dosageForm: 'inhaler' },
-  { medicineId: 'seroflo-250',        name: 'Seroflo 250',         activeIngredient: 'Salmeterol + Fluticasone 250mcg',                         dosageForm: 'inhaler' },
+  { medicineId: 'foracort-200',       name: 'Foracort 200',        activeIngredient: 'Formoterol + Budesonide 200mcg',                          dosageForm: 'inhaler', strength: '200mcg' },
+  { medicineId: 'seroflo-250',        name: 'Seroflo 250',         activeIngredient: 'Salmeterol + Fluticasone 250mcg',                         dosageForm: 'inhaler', strength: '250mcg' },
   { medicineId: 'budecort',           name: 'Budecort',            activeIngredient: 'Budesonide',                                              dosageForm: 'inhaler' },
   { medicineId: 'duolin-inhaler',     name: 'Duolin Inhaler',      activeIngredient: 'Levosalbutamol + Ipratropium' },
 

@@ -118,12 +118,17 @@ async function enrich(db: Firestore): Promise<{ total: number; ok: number; fail:
     const ingredient = data.activeIngredient ?? null
     try {
       const brandName = extractBrandName(name)
-      const strength = extractStrength(name, ingredient)
       // AK-148 — Explicit seed override wins over name-keyword inference.
       // This lets the curated list correct cases the heuristic gets wrong
       // (insulins extract as 'tablet'; Digene Gel extracts as 'cream').
       const seedEntry = SEED_BY_ID.get(docSnap.id)
       const dosageForm = seedEntry?.dosageForm ?? extractDosageForm(name)
+      // AK-152 — Same override pattern for strength. Uses `!== undefined`
+      // rather than `??` because `null` is a valid explicit override
+      // (Mixtard 30 has no meaningful per-dose mg value).
+      const strength = seedEntry?.strength !== undefined
+        ? seedEntry.strength
+        : extractStrength(name, ingredient)
       await docSnap.ref.update({
         brandName,
         strength,
