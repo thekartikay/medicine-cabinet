@@ -5158,6 +5158,37 @@
   cursor: not-allowed;
 }
 
+/* AK-150 — Destructive action button (medicine delete, dispose confirm). */
+.bs-btn--danger {
+  background: #E24B4A;
+  color: #ffffff;
+}
+.bs-btn--danger:hover { background: #c63d3c; }
+.bs-btn--danger:disabled {
+  background: #f0a8a7;
+  cursor: not-allowed;
+}
+
+/* AK-150 — Per-batch trash icon button inside the batch list. Small,
+   transparent affordance that sits at the end of each row. */
+.bs-batch-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+}
+.bs-batch-delete:hover {
+  background: rgba(226, 75, 74, 0.08);
+  color: #E24B4A;
+}
+
 /* ── Consent screen (cs-) — MC-017a ──────────────────────────── */
 
 .cs-root {

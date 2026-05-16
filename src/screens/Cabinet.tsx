@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ChevronDown, Pill } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Pill, Trash2 } from 'lucide-react'
 import {
   getOrCreateDefaultCabinet,
   subscribeCabinetItems,
@@ -13,6 +13,7 @@ import {
   updateCabinetItem,
   getActiveTreatmentsWithRegimensForMember,
   deleteCabinetItem,
+  disposeCabinetItem,
 } from '../services/firestoreService'
 import { checkCabinetInteractions } from '../services/geminiService'
 import { TreatmentInteractionWarningModal } from '../components/TreatmentInteractionWarningModal'
@@ -236,6 +237,15 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   const [editingItem, setEditingItem] = useState<CabinetItem | null>(null)
   const [editConfirmOpen, setEditConfirmOpen] = useState(false)
   const [editAffectedTreatments, setEditAffectedTreatments] = useState<Treatment[]>([])
+
+  // AK-150 — Soft-delete flow state. disposingItems is non-empty while the
+  // confirmation modal is open and holds the batch(es) about to be disposed
+  // (one for per-batch delete, the full group for medicine-level delete).
+  // disposeAffected lists every active treatment that references any of
+  // them — drives the warning copy and shows the user what will be impacted.
+  const [disposingItems, setDisposingItems] = useState<CabinetItem[] | null>(null)
+  const [disposeAffected, setDisposeAffected] = useState<Treatment[]>([])
+  const [disposeLoading, setDisposeLoading] = useState(false)
 
   // ── Read-only filter set: cabinetItem ids used in this user's treatments ──
   const [allowedItemIds, setAllowedItemIds] = useState<Set<string> | null>(null)
@@ -507,6 +517,50 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
         ? ((formCustomUnit.trim() || 'other') as CabinetItemUnit)
         : formUnit
     await commitEdit(newStrength, newUnit)
+  }
+
+  // AK-150 — Open the dispose confirmation modal for a single batch or for
+  // every batch in a group. Collects affected active treatments (union
+  // across all targeted iIds, deduped by tId) so the warning copy can
+  // name them.
+  function startDispose(targets: CabinetItem[]) {
+    if (targets.length === 0) return
+    const usedAcross = targets.flatMap(it => treatmentsUsingItem(it.iId))
+    const dedup = Array.from(new Map(usedAcross.map(t => [t.tId, t])).values())
+    setDisposingItems(targets)
+    setDisposeAffected(dedup)
+  }
+
+  function cancelDispose() {
+    setDisposingItems(null)
+    setDisposeAffected([])
+    setDisposeLoading(false)
+  }
+
+  async function confirmDispose() {
+    if (!disposingItems || !cId) return
+    setDisposeLoading(true)
+    try {
+      // Sequential rather than Promise.all so a failure on item N doesn't
+      // leave the user wondering which of items 1..N also failed silently
+      // — and the per-write payload is tiny so there's no latency win
+      // from parallelizing.
+      for (const it of disposingItems) {
+        await disposeCabinetItem(hId, cId, it.iId)
+      }
+      // Subscription filter will remove the disposed items from `items`
+      // on the next snapshot — the detail sheet (which is keyed off
+      // selectedGroupKey looking up groupMap) will then auto-close
+      // because the group it points at no longer exists.
+      cancelDispose()
+      setSelectedGroupKey(null)
+    } catch {
+      setDisposeLoading(false)
+      // Leave modal open so user can retry; surfaceable error UX is
+      // deferred — disposeCabinetItem failures here are rare (single
+      // updateDoc with App Check) and the modal stays in a sensible
+      // retry-or-cancel state.
+    }
   }
 
   function openSearch() {
@@ -1340,6 +1394,20 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
                           : status === 'low-stock' ? 'Low Stock'
                           : 'Expired'}
                       </span>
+                      {!readOnly && (
+                        // AK-150 — Per-batch soft delete. stopPropagation
+                        // so the tap doesn't bubble to the sheet's overlay
+                        // close handler.
+                        <button
+                          type="button"
+                          className="bs-batch-delete"
+                          aria-label={`Delete batch ${idx + 1}`}
+                          title={`Delete batch ${idx + 1}`}
+                          onClick={(e) => { e.stopPropagation(); startDispose([it]) }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
                     </li>
                   )
                 })}
@@ -1390,6 +1458,19 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
                 </button>
               )
             })()}
+            {!readOnly && (
+              // AK-150 — Medicine-level (group-level) soft delete. Disposes
+              // every batch in the group. Works for both single-batch and
+              // multi-batch groups; the per-batch trash icons inside the
+              // batch list cover the single-batch-out-of-many case.
+              <button
+                type="button"
+                className="bs-btn bs-btn--danger"
+                onClick={() => startDispose(group.items)}
+              >
+                Delete medicine
+              </button>
+            )}
             <button
               type="button"
               className="bs-btn bs-btn--primary"
@@ -1398,6 +1479,53 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
               Close
             </button>
           </div>
+
+          {/* AK-150 — Dispose confirmation modal. One copy serves both
+              per-batch and medicine-level delete; the count of items and
+              affected treatments adapts the message. */}
+          {disposingItems && (
+            <div
+              className="bs-overlay"
+              onClick={cancelDispose}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="dispose-confirm-title"
+            >
+              <div className="bs-sheet" onClick={(e) => e.stopPropagation()}>
+                <span className="bs-handle" aria-hidden="true" />
+                <h2 id="dispose-confirm-title" className="bs-title">
+                  {disposingItems.length === 1
+                    ? 'Delete this batch?'
+                    : `Delete ${disposingItems.length} batches?`}
+                </h2>
+                <p style={{ marginTop: 8 }}>
+                  {disposeAffected.length === 0
+                    ? 'This batch is not used in any active treatment.'
+                    : disposeAffected.length === 1
+                      ? `This medicine is used in ${disposeAffected[0].name}. Deleting it won't stop the treatment but doses can no longer debit inventory. Continue?`
+                      : `This medicine is used in ${disposeAffected.length} active treatments: ${disposeAffected.map(t => t.name).join(', ')}. Deleting it won't stop the treatments but doses can no longer debit inventory. Continue?`}
+                </p>
+                <div className="bs-actions" style={{ marginTop: 16 }}>
+                  <button
+                    type="button"
+                    className="bs-btn bs-btn--secondary"
+                    onClick={cancelDispose}
+                    disabled={disposeLoading}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="bs-btn bs-btn--danger"
+                    onClick={confirmDispose}
+                    disabled={disposeLoading}
+                  >
+                    {disposeLoading ? 'Deleting…' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     )

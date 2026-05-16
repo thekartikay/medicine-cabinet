@@ -153,6 +153,13 @@ export interface CabinetItem {
     description: string
     checkedAt: Timestamp
   } | null
+  // AK-150 — Soft-delete marker. Set by disposeCabinetItem (user-initiated
+  // batch or medicine deletion from the cabinet detail sheet). The service
+  // layer filters disposed items out of subscribeCabinetItems and
+  // getCabinetItems, so disposed items never reach the UI. Absent/null
+  // means the item is live. Dose logs referencing a disposed item's iId
+  // remain valid historical records — the iId itself is unchanged.
+  disposedAt?: Timestamp | null
 }
 
 export interface MasterMedicine {

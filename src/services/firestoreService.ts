@@ -132,7 +132,11 @@ export async function getOrCreateDefaultCabinet(hId: string): Promise<string> {
 
 export async function getCabinetItems(hId: string, cId: string): Promise<CabinetItem[]> {
   const snap = await getDocs(collection(db, itemsCollectionPath(hId, cId)))
-  return snap.docs.map(d => d.data() as CabinetItem)
+  // AK-150 — Client-side filter for soft-deleted items. Truthy disposedAt
+  // (any Timestamp) is excluded; undefined and null both pass through.
+  return snap.docs
+    .map(d => d.data() as CabinetItem)
+    .filter(i => !i.disposedAt)
 }
 
 export async function addCabinetItem(
@@ -229,6 +233,12 @@ export async function updateCabinetItem(
 // that conflicts with a household member's active treatment. Admin-only at
 // the rules layer (allow delete: if isAdmin(hId)).
 //
+// AK-150 — User-initiated batch / medicine deletion now uses the soft-delete
+// disposeCabinetItem below. This hard delete stays in place because the
+// AK-124 case is a true undo of a doc that was just written seconds ago —
+// no dose logs yet reference it, and the user expects the row to vanish
+// rather than be filtered out.
+//
 // Note: existing dose logs that reference this iId stay in place — the dose
 // log is its own historical record and isn't garbage-collected when the
 // cabinet item it points at goes away. The audit reconciliation view (when
@@ -241,6 +251,22 @@ export async function deleteCabinetItem(
   await deleteDoc(doc(db, itemPath(hId, cId, iId)))
 }
 
+// AK-150 — Soft-delete a cabinet item. Stamps disposedAt; subscribeCabinetItems
+// and getCabinetItems filter the item out of all UI consumers from that point.
+// The doc itself is preserved so dose logs referencing this iId still resolve
+// against a real document (matters for the audit reconciliation view and any
+// "Updated by" / "Used in" lookups that may need to display a disposed-batch
+// label rather than a dangling reference).
+export async function disposeCabinetItem(
+  hId: string,
+  cId: string,
+  iId: string,
+): Promise<void> {
+  await updateDoc(doc(db, itemPath(hId, cId, iId)), {
+    disposedAt: serverTimestamp(),
+  })
+}
+
 export function subscribeCabinetItems(
   hId: string,
   cId: string,
@@ -249,7 +275,13 @@ export function subscribeCabinetItems(
 ): () => void {
   return onSnapshot(
     collection(db, itemsCollectionPath(hId, cId)),
-    snap => onData(snap.docs.map(d => d.data() as CabinetItem)),
+    // AK-150 — Same filter as getCabinetItems; keeps disposed items out of
+    // every consumer's `items` state.
+    snap => onData(
+      snap.docs
+        .map(d => d.data() as CabinetItem)
+        .filter(i => !i.disposedAt),
+    ),
     err => onError?.(err),
   )
 }
