@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ChevronLeft, Plus, X, Clock, AlertTriangle,
   Pause, Play, StopCircle, Trash2, ChevronDown, CalendarHeart,
@@ -23,18 +23,25 @@ import {
   getActiveTreatmentsWithRegimensForMember,
   recordConflictAcknowledgement,
   logRetroactiveDoses,
+  addCabinetItem,
+  searchMasterDb,
+  updateCabinetItemInteractionWarning,
+  deleteCabinetItem,
 } from '../services/firestoreService'
 import { buildSlotId } from '../lib/paths'
 import { checkCabinetInteractions } from '../services/geminiService'
 import { InteractionWarningModal } from '../components/InteractionWarningModal'
+import { TreatmentInteractionWarningModal } from '../components/TreatmentInteractionWarningModal'
 import { TreatmentConflictModal, type ConflictType } from '../components/TreatmentConflictModal'
 import { PastDateModal } from '../components/PastDateModal'
 import { RetroLogSheet, type RetroSlot } from '../components/RetroLogSheet'
 import type {
   CabinetItem,
   CabinetItemUnit,
+  DosageForm,
   FoodTiming,
   HouseholdMember,
+  MasterMedicine,
   Regimen,
   ScheduleType,
   TimeSlot,
@@ -136,6 +143,63 @@ function unitPillLabel(unit: string): string {
   if (!unit) return ''
   if (unit === 'ml') return 'ml'
   return unit.charAt(0).toUpperCase() + unit.slice(1)
+}
+
+// AK-133 — inline-add helpers replicated from Cabinet.tsx (per the AK-149
+// read-only pill pattern). Kept local rather than imported because Cabinet.tsx
+// owns the master add flow and cross-screen imports would couple the two.
+const ALLOWED_DOSAGE_FORMS: DosageForm[] = [
+  'tablet', 'capsule', 'syrup', 'injection', 'cream',
+  'ointment', 'dispersible', 'drops', 'spray', 'powder', 'inhaler', 'patch',
+]
+
+const DOSAGE_FORM_LABELS: Record<DosageForm, string> = {
+  tablet:      'Tablet',
+  capsule:     'Capsule',
+  syrup:       'Syrup',
+  injection:   'Injection',
+  cream:       'Cream',
+  ointment:    'Ointment',
+  dispersible: 'Dispersible Tablet',
+  drops:       'Drops',
+  spray:       'Spray',
+  powder:      'Powder',
+  inhaler:     'Inhaler',
+  patch:       'Patch',
+}
+
+function suggestUnitForForm(form: DosageForm): CabinetItemUnit {
+  switch (form) {
+    case 'inhaler':     return 'puff'
+    case 'drops':       return 'drop'
+    case 'patch':       return 'patch'
+    case 'syrup':       return 'ml'
+    case 'cream':
+    case 'ointment':    return 'application'
+    case 'injection':   return 'dose'
+    case 'capsule':     return 'capsule'
+    case 'spray':       return 'spray'
+    case 'tablet':
+    case 'dispersible':
+    case 'powder':
+    default:            return 'tablet'
+  }
+}
+
+function dosageFormFromMaster(m: MasterMedicine): DosageForm {
+  const raw = m.dosageForm
+  if (raw && ALLOWED_DOSAGE_FORMS.includes(raw as DosageForm)) {
+    return raw as DosageForm
+  }
+  return 'tablet'
+}
+
+function unitFromMaster(m: MasterMedicine): CabinetItemUnit {
+  return suggestUnitForForm(dosageFormFromMaster(m))
+}
+
+function masterDisplayName(m: MasterMedicine): string {
+  return m.brandName ?? m.name
 }
 
 const MAX_RETRO_DAYS = 30
@@ -264,6 +328,11 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   // Empty string when healthy; otherwise an inline error message rendered
   // in the step-2 picker.
   const [cabinetError, setCabinetError] = useState('')
+  // AK-133 — Lifted from the subscription effect so the inline-add flow can
+  // call addCabinetItem against the same default cabinet the picker reads.
+  // Empty until the effect resolves; the mini-form's Add button stays
+  // disabled in the brief window before then.
+  const [cId, setCId] = useState('')
 
   // Step 1
   const [formName, setFormName] = useState('')
@@ -339,6 +408,37 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   const [retroSlots, setRetroSlots] = useState<RetroSlot[]>([])
   const [retroWasCapped, setRetroWasCapped] = useState(false)
 
+  // AK-133 — Step 2 two-source combobox state. Search query feeds a debounced
+  // masterDb lookup; cabinetItems are filtered client-side against the same
+  // query. The mini-form (inlineAddMaster non-null) takes over the picker
+  // surface while the user is filling in qty / expiry / Rx for a masterDb
+  // pick that isn't yet in the cabinet.
+  const [medicineSearchQuery, setMedicineSearchQuery] = useState('')
+  const [masterSearchResults, setMasterSearchResults] = useState<MasterMedicine[]>([])
+  const [masterSearchLoading, setMasterSearchLoading] = useState(false)
+  const medicineSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const [inlineAddMaster, setInlineAddMaster] = useState<MasterMedicine | null>(null)
+  const [inlineAddQty, setInlineAddQty] = useState('')
+  const [inlineAddExpiry, setInlineAddExpiry] = useState('')
+  const [inlineAddPrescribed, setInlineAddPrescribed] = useState(false)
+  const [inlineAddLoading, setInlineAddLoading] = useState(false)
+  const [inlineAddError, setInlineAddError] = useState('')
+  // Brief success confirmation surfaced just below the picker after a
+  // successful inline add. Auto-clears after 3s via the effect below.
+  const [inlineAddSuccess, setInlineAddSuccess] = useState('')
+
+  // AK-124 (replicated for AK-133) — Cross-member active-treatment interaction
+  // warning surfaced after an inline add. Mirrors Cabinet.tsx's state shape so
+  // the same TreatmentInteractionWarningModal can render against it.
+  const [treatmentInteractionWarning, setTreatmentInteractionWarning] = useState<{
+    description: string
+    withMedicineNames: string[]
+    riskLevel: 'moderate' | 'high'
+    iId: string
+    cabinetId: string
+  } | null>(null)
+
   // ── Per-treatment regimens (used for OOS detection in the list view) ──
   // Loaded alongside adherence so a single Firestore round-trip serves both.
   const [regimensByTId, setRegimensByTId] = useState<Record<string, Regimen[]>>({})
@@ -409,11 +509,12 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     async function setup() {
       setCabinetError('')
       try {
-        const cId = await getOrCreateDefaultCabinet(hId)
+        const resolvedCId = await getOrCreateDefaultCabinet(hId)
         if (cancelled) return
+        setCId(resolvedCId)
         unsubscribe = subscribeCabinetItems(
           hId,
-          cId,
+          resolvedCId,
           (items) => {
             if (cancelled) return
             setCabinetItems(items)
@@ -435,6 +536,45 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setup()
     return () => { cancelled = true; unsubscribe?.() }
   }, [hId])
+
+  // AK-133 — Debounced masterDb prefix search. Mirrors Cabinet.tsx's 300ms
+  // window so the typing cadence feels identical across the two screens.
+  // Empty query short-circuits to an empty result set (no Firestore read).
+  useEffect(() => {
+    if (medicineSearchDebounceRef.current) {
+      clearTimeout(medicineSearchDebounceRef.current)
+    }
+    const trimmed = medicineSearchQuery.trim()
+    if (!trimmed) {
+      setMasterSearchResults([])
+      setMasterSearchLoading(false)
+      return
+    }
+    medicineSearchDebounceRef.current = setTimeout(async () => {
+      setMasterSearchLoading(true)
+      try {
+        const results = await searchMasterDb(trimmed)
+        setMasterSearchResults(results)
+      } catch {
+        setMasterSearchResults([])
+      } finally {
+        setMasterSearchLoading(false)
+      }
+    }, 300)
+    return () => {
+      if (medicineSearchDebounceRef.current) {
+        clearTimeout(medicineSearchDebounceRef.current)
+      }
+    }
+  }, [medicineSearchQuery])
+
+  // Brief success flash auto-clears after 3s so it doesn't linger across
+  // step changes or repeated adds.
+  useEffect(() => {
+    if (!inlineAddSuccess) return
+    const t = setTimeout(() => setInlineAddSuccess(''), 3000)
+    return () => clearTimeout(t)
+  }, [inlineAddSuccess])
 
   // Per-treatment adherence over the trailing 7 days, plus the latest end-date
   // across that treatment's regimens (used for "X days remaining" on acute
@@ -772,6 +912,17 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setRetroSlots([])
     setRetroWasCapped(false)
     setStepError('')
+    // AK-133 — clear inline-add + search surfaces too so re-entering the
+    // wizard doesn't carry stale state across.
+    setMedicineSearchQuery('')
+    setMasterSearchResults([])
+    setInlineAddMaster(null)
+    setInlineAddQty('')
+    setInlineAddExpiry('')
+    setInlineAddPrescribed(false)
+    setInlineAddError('')
+    setInlineAddSuccess('')
+    setTreatmentInteractionWarning(null)
     setView('list')
   }
 
@@ -973,6 +1124,185 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setFormMedicineId(item.medicineId)
     setFormDoseUnit(item.unit)
     setFormDisplayName(item.displayNameOverride ?? item.medicineId)
+  }
+
+  // AK-133 — Pick a cabinet item from the two-source combobox results. Wraps
+  // selectCabinetItem so the search query / dropdown collapses on confirm.
+  function selectCabinetItemFromSearch(iId: string) {
+    selectCabinetItem(iId)
+    setMedicineSearchQuery('')
+    setMasterSearchResults([])
+  }
+
+  // AK-133 — Open the inline mini-form for a masterDb result. Defaults
+  // mirror Cabinet.tsx: Rx defaults to false (OTC); qty/expiry left blank for
+  // the user to fill in. Clears any prior error/success surface.
+  function openInlineAddFor(master: MasterMedicine) {
+    setInlineAddMaster(master)
+    setInlineAddQty('')
+    setInlineAddExpiry('')
+    setInlineAddPrescribed(false)
+    setInlineAddError('')
+    setInlineAddSuccess('')
+  }
+
+  function cancelInlineAdd() {
+    setInlineAddMaster(null)
+    setInlineAddQty('')
+    setInlineAddExpiry('')
+    setInlineAddPrescribed(false)
+    setInlineAddError('')
+  }
+
+  // AK-133 — Replicates the AK-39 (passive cabinet-sibling) + AK-124
+  // (cross-member active-treatment) interaction checks from Cabinet.tsx
+  // L710-758. Fire-and-forget: errors are swallowed and never block the
+  // wizard. The new item's iId is excluded from the AK-124 candidate pool
+  // so the just-added doc doesn't appear to interact with itself.
+  function runPostAddInteractionChecks(
+    newIid: string,
+    cabinetIdLocal: string,
+    newItem: CabinetItem,
+    otherItems: CabinetItem[],
+  ) {
+    if (otherItems.length > 0) {
+      checkCabinetInteractions(newItem, otherItems.map(it => it.iId))
+        .then(result => {
+          if (result?.hasInteraction) {
+            return updateCabinetItemInteractionWarning(
+              hId,
+              cabinetIdLocal,
+              newIid,
+              {
+                withMedicineNames: result.withMedicineNames,
+                riskLevel: result.riskLevel,
+                description: result.description,
+              },
+            )
+          }
+        })
+        .catch(() => {
+          // Passive background check — never blocks or surfaces.
+        })
+    }
+
+    const memberUids = members.map(m => m.uid)
+    if (memberUids.length > 0) {
+      Promise.all(
+        memberUids.map(uid => getActiveTreatmentsWithRegimensForMember(hId, uid)),
+      )
+        .then(results => {
+          const treatmentItemIds = results
+            .flat()
+            .flatMap(({ regimens }) => regimens.map(r => r.cabinetItemId))
+            .filter(id => id && id !== newIid)
+          if (treatmentItemIds.length === 0) return null
+          return checkCabinetInteractions(newItem, treatmentItemIds)
+        })
+        .then(result => {
+          if (!result?.hasInteraction) return
+          setTreatmentInteractionWarning({
+            description: result.description,
+            withMedicineNames: result.withMedicineNames,
+            riskLevel: result.riskLevel,
+            iId: newIid,
+            cabinetId: cabinetIdLocal,
+          })
+        })
+        .catch(() => {
+          // Informational warning, never blocks the add.
+        })
+    }
+  }
+
+  async function handleInlineAdd() {
+    if (!inlineAddMaster) return
+    if (!cId) {
+      setInlineAddError(
+        'No cabinet is set up yet for this household. Try again in a moment.',
+      )
+      return
+    }
+    const qty = parseInt(inlineAddQty, 10)
+    if (!inlineAddQty || isNaN(qty) || qty < 0) {
+      setInlineAddError('Enter a valid quantity.')
+      return
+    }
+    if (!inlineAddExpiry) {
+      setInlineAddError('Expiry date is required.')
+      return
+    }
+    setInlineAddError('')
+    setInlineAddLoading(true)
+
+    const master = inlineAddMaster
+    const cabinetIdLocal = cId
+    // Snapshot the comparison set BEFORE the subscription fires with the
+    // post-add list — mirrors Cabinet.tsx's pattern.
+    const otherItems = cabinetItems
+    const resolvedUnit = unitFromMaster(master)
+    const resolvedDosageForm = dosageFormFromMaster(master)
+    const resolvedMedicineId = master.medicineId
+
+    try {
+      const newIid = await addCabinetItem(hId, cabinetIdLocal, {
+        medicineId: resolvedMedicineId,
+        brandName: masterDisplayName(master),
+        displayNameOverride: null,
+        quantityOnHand: qty,
+        unit: resolvedUnit,
+        expiryDate: inlineAddExpiry,
+        prescribed: inlineAddPrescribed,
+        dosageForm: resolvedDosageForm,
+        strength: master.strength ?? null,
+        activeIngredients: master.activeIngredient ?? null,
+        marketer: null,
+        storageInstructions: null,
+        masterDbId: master.medicineId,
+      })
+
+      // Wire the new item into the wizard. The subscription will catch up
+      // shortly with the full doc, but the user expects immediate feedback,
+      // so we mirror the relevant fields onto wizard state directly rather
+      // than waiting for cabinetItems to refresh.
+      setFormCabinetItemId(newIid)
+      setFormMedicineId(resolvedMedicineId)
+      setFormDoseUnit(resolvedUnit)
+      setFormDisplayName(masterDisplayName(master))
+
+      // Build the CabinetItem-shaped payload the interaction check reads.
+      // Server-stamped timestamp fields are absent — checkCabinetInteractions
+      // only inspects identity/strength/activeIngredients, so a cast is safe.
+      const newItem = {
+        iId: newIid,
+        cId: cabinetIdLocal,
+        hId,
+        medicineId: resolvedMedicineId,
+        displayNameOverride: null,
+        quantityOnHand: qty,
+        unit: resolvedUnit,
+        expiryDate: inlineAddExpiry,
+        prescribed: inlineAddPrescribed,
+        brandName: masterDisplayName(master),
+        dosageForm: resolvedDosageForm,
+        strength: master.strength ?? null,
+        activeIngredients: master.activeIngredient ?? null,
+        marketer: null,
+        storageInstructions: null,
+        masterDbId: master.medicineId,
+      } as CabinetItem
+      runPostAddInteractionChecks(newIid, cabinetIdLocal, newItem, otherItems)
+
+      // Collapse the mini-form, clear the search surface, flash the success.
+      cancelInlineAdd()
+      setMedicineSearchQuery('')
+      setMasterSearchResults([])
+      setInlineAddSuccess(`${masterDisplayName(master)} added to your cabinet`)
+    } catch {
+      setInlineAddError('Could not add medicine. Please try again.')
+    } finally {
+      setInlineAddLoading(false)
+    }
   }
 
   const stepNum = view === 'step1' ? 1 : view === 'step2' ? 2 : view === 'step3' ? 3 : 4
@@ -1574,7 +1904,7 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
       {view === 'step2' && (
         <div className="cb-form">
           <div className="cb-field">
-            <label className="cb-label" htmlFor="tr-medicine">Select from cabinet</label>
+            <label className="cb-label" htmlFor="tr-medicine-search">Medicine</label>
             {(() => {
               // AK-120 — filter expired items out of the picker. YYYY-MM-DD
               // strings compare lexicographically, so a string >= comparison
@@ -1588,34 +1918,288 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
               if (cabinetError) {
                 return <p className="cb-hint cb-hint--error" role="alert">{cabinetError}</p>
               }
-              if (cabinetItems.length === 0) {
-                return <p className="cb-hint">Your cabinet is empty. Add medicines in the Cabinet tab first.</p>
-              }
-              if (availableItems.length === 0) {
+
+              // AK-133 — Mini-form takes over the picker surface while the
+              // user is filling in qty / expiry / Rx for a masterDb pick.
+              if (inlineAddMaster) {
+                const master = inlineAddMaster
+                const dosageFormResolved = dosageFormFromMaster(master)
+                const unitResolved = unitFromMaster(master)
+                const canSave =
+                  !!cId
+                  && !inlineAddLoading
+                  && !!inlineAddQty
+                  && !isNaN(parseInt(inlineAddQty, 10))
+                  && parseInt(inlineAddQty, 10) >= 0
+                  && !!inlineAddExpiry
                 return (
-                  <p className="cb-hint cb-hint--error" role="alert">
-                    All your medicines have expired. Please update your cabinet before creating a treatment.
-                  </p>
+                  <div className="cb-form" style={{ gap: 12 }}>
+                    <p className="cb-hint">
+                      Add <strong>{masterDisplayName(master)}</strong> to your cabinet
+                    </p>
+                    <div className="cb-field">
+                      <span className="cb-label">Medicine</span>
+                      <span
+                        className="cb-input cb-input--readonly"
+                        aria-label={`Medicine: ${masterDisplayName(master)}`}
+                      >
+                        {masterDisplayName(master)}
+                      </span>
+                    </div>
+                    <div className="cb-field-row">
+                      <div className="cb-field">
+                        <span className="cb-label">Dosage form</span>
+                        <span
+                          className="cb-input cb-input--readonly"
+                          aria-label={`Dosage form: ${DOSAGE_FORM_LABELS[dosageFormResolved]}`}
+                        >
+                          {DOSAGE_FORM_LABELS[dosageFormResolved]}
+                        </span>
+                      </div>
+                      <div className="cb-field">
+                        <span className="cb-label">Strength</span>
+                        <span
+                          className="cb-input cb-input--readonly"
+                          aria-label={`Strength: ${master.strength ?? 'not specified'}`}
+                        >
+                          {master.strength ?? '—'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="cb-field-row">
+                      <div className="cb-field">
+                        <label className="cb-label" htmlFor="tr-inline-qty">Quantity</label>
+                        <input
+                          id="tr-inline-qty"
+                          className="cb-input"
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          placeholder="30"
+                          value={inlineAddQty}
+                          onChange={e => setInlineAddQty(e.target.value)}
+                          autoFocus
+                        />
+                      </div>
+                      <div className="cb-field">
+                        <span className="cb-label">Unit</span>
+                        <span
+                          className="cb-input cb-input--readonly"
+                          aria-label={`Unit: ${unitPillLabel(unitResolved)}`}
+                        >
+                          {unitPillLabel(unitResolved)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="cb-field">
+                      <label className="cb-label" htmlFor="tr-inline-expiry">Expiry date</label>
+                      <input
+                        id="tr-inline-expiry"
+                        className="cb-input"
+                        type="date"
+                        min={todayIST}
+                        value={inlineAddExpiry}
+                        onChange={e => setInlineAddExpiry(e.target.value)}
+                      />
+                    </div>
+                    <div className="cb-field">
+                      <label className="cb-label" htmlFor="tr-inline-prescribed">
+                        Prescription type
+                      </label>
+                      <select
+                        id="tr-inline-prescribed"
+                        className="cb-input cb-select"
+                        value={inlineAddPrescribed ? 'rx' : 'otc'}
+                        onChange={e => setInlineAddPrescribed(e.target.value === 'rx')}
+                      >
+                        <option value="otc">Over the counter (OTC)</option>
+                        <option value="rx">Prescription (Rx)</option>
+                      </select>
+                    </div>
+                    {inlineAddError && (
+                      <p className="cb-form-error" role="alert">{inlineAddError}</p>
+                    )}
+                    <div className="cb-field-row">
+                      <button
+                        type="button"
+                        className="cb-submit-btn"
+                        onClick={handleInlineAdd}
+                        disabled={!canSave}
+                      >
+                        {inlineAddLoading ? 'Adding…' : 'Add to cabinet'}
+                      </button>
+                      <button
+                        type="button"
+                        className="cb-cancel-btn"
+                        onClick={cancelInlineAdd}
+                        disabled={inlineAddLoading}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 )
               }
+
+              // A medicine is already selected — show a compact "Selected"
+              // chip with a Change affordance instead of the search results,
+              // so the user can confirm what they picked and back out if
+              // needed without scrolling through results.
+              if (formCabinetItemId) {
+                const selected = cabinetItems.find(i => i.iId === formCabinetItemId)
+                const name = selected
+                  ? (selected.displayNameOverride ?? selected.brandName ?? selected.medicineId)
+                  : formDisplayName || 'Selected medicine'
+                const qtyLabel = selected
+                  ? `${selected.quantityOnHand} ${selected.unit === 'ml' ? 'ml' : selected.unit + 's'}`
+                  : ''
+                return (
+                  <>
+                    <div className="cb-field-row" style={{ alignItems: 'center' }}>
+                      <span
+                        className="cb-input cb-input--readonly"
+                        style={{ flex: 1 }}
+                        aria-label={`Selected medicine: ${name}`}
+                      >
+                        {name}{qtyLabel ? ` (${qtyLabel})` : ''}
+                      </span>
+                      <button
+                        type="button"
+                        className="cb-link-btn"
+                        onClick={() => {
+                          selectCabinetItem('')
+                          setMedicineSearchQuery('')
+                          setMasterSearchResults([])
+                        }}
+                      >
+                        Change
+                      </button>
+                    </div>
+                    {inlineAddSuccess && (
+                      <p className="cb-hint" role="status">{inlineAddSuccess}</p>
+                    )}
+                  </>
+                )
+              }
+
+              const queryTrimmed = medicineSearchQuery.trim()
+              const queryLower = queryTrimmed.toLowerCase()
+              const cabinetMatches = queryLower
+                ? availableItems.filter(item => {
+                    const candidates = [
+                      item.displayNameOverride,
+                      item.brandName,
+                      item.medicineId,
+                      item.activeIngredients,
+                    ].filter((v): v is string => !!v)
+                    return candidates.some(s => s.toLowerCase().includes(queryLower))
+                  })
+                : availableItems
+              const cabinetMedicineIds = new Set(
+                cabinetItems.map(i => i.masterDbId ?? i.medicineId),
+              )
+              const masterMatches = masterSearchResults.filter(
+                m => !cabinetMedicineIds.has(m.medicineId),
+              )
+
               return (
-                <select
-                  id="tr-medicine"
-                  className="cb-input cb-select"
-                  value={formCabinetItemId}
-                  onChange={e => selectCabinetItem(e.target.value)}
-                >
-                  <option value="">— Choose a medicine —</option>
-                  {availableItems.map(item => {
-                    const name = item.displayNameOverride ?? item.medicineId
-                    const unit = item.unit === 'ml' ? 'ml' : `${item.unit}s`
-                    return (
-                      <option key={item.iId} value={item.iId}>
-                        {name} ({item.quantityOnHand} {unit})
-                      </option>
-                    )
-                  })}
-                </select>
+                <>
+                  <input
+                    id="tr-medicine-search"
+                    className="cb-input"
+                    type="search"
+                    placeholder={
+                      cabinetItems.length === 0
+                        ? 'Search for a medicine to add it to your cabinet'
+                        : 'Search your cabinet or add a new medicine'
+                    }
+                    value={medicineSearchQuery}
+                    onChange={e => setMedicineSearchQuery(e.target.value)}
+                    autoComplete="off"
+                  />
+
+                  {cabinetItems.length === 0 && !queryTrimmed && (
+                    <p className="cb-hint">
+                      Search for a medicine to add it to your cabinet.
+                    </p>
+                  )}
+
+                  {cabinetItems.length > 0 && availableItems.length === 0 && (
+                    <p className="cb-hint cb-hint--error" role="alert">
+                      All your medicines have expired. Search above to add a fresh batch.
+                    </p>
+                  )}
+
+                  {cabinetMatches.length > 0 && (
+                    <>
+                      <p className="cb-label" style={{ marginTop: 8 }}>In your cabinet</p>
+                      <ul className="cb-result-list" role="listbox" aria-label="Cabinet medicines">
+                        {cabinetMatches.map(item => {
+                          const name = item.displayNameOverride ?? item.brandName ?? item.medicineId
+                          const unit = item.unit === 'ml' ? 'ml' : `${item.unit}s`
+                          return (
+                            <li key={item.iId}>
+                              <button
+                                type="button"
+                                className="cb-result-btn"
+                                onClick={() => selectCabinetItemFromSearch(item.iId)}
+                                role="option"
+                                aria-selected={false}
+                              >
+                                <span className="cb-result-name">{name}</span>
+                                <span className="cb-result-ingredient">
+                                  {item.quantityOnHand} {unit}
+                                  {item.strength ? ` · ${item.strength}` : ''}
+                                </span>
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </>
+                  )}
+
+                  {queryTrimmed && masterSearchLoading && (
+                    <p className="cb-hint">Searching…</p>
+                  )}
+
+                  {queryTrimmed && !masterSearchLoading && masterMatches.length > 0 && (
+                    <>
+                      <p className="cb-label" style={{ marginTop: 8 }}>Add to cabinet</p>
+                      <ul className="cb-result-list" role="listbox" aria-label="Catalog matches">
+                        {masterMatches.map(m => (
+                          <li key={m.medicineId}>
+                            <button
+                              type="button"
+                              className="cb-result-btn"
+                              onClick={() => openInlineAddFor(m)}
+                              role="option"
+                              aria-selected={false}
+                            >
+                              <span className="cb-result-name">{masterDisplayName(m)}</span>
+                              {(m.strength || m.activeIngredient) && (
+                                <span className="cb-result-ingredient">
+                                  {[m.strength, m.activeIngredient].filter(Boolean).join(' · ')}
+                                </span>
+                              )}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+
+                  {queryTrimmed
+                    && !masterSearchLoading
+                    && cabinetMatches.length === 0
+                    && masterMatches.length === 0 && (
+                    <p className="cb-hint">No matches for "{queryTrimmed}".</p>
+                  )}
+
+                  {inlineAddSuccess && (
+                    <p className="cb-hint" role="status">{inlineAddSuccess}</p>
+                  )}
+                </>
               )
             })()}
           </div>
@@ -1908,6 +2492,27 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
             setView('step3')
           }}
           onGoBack={() => setPendingInteractionWarning(null)}
+        />
+      )}
+
+      {/* AK-124 (via AK-133) — surfaces when an inline-added cabinet item
+          interacts with a medicine on another household member's active
+          treatment. The Remove path also clears the wizard's selection so
+          the user has to pick again before advancing. */}
+      {treatmentInteractionWarning && (
+        <TreatmentInteractionWarningModal
+          warning={treatmentInteractionWarning}
+          onDismiss={() => setTreatmentInteractionWarning(null)}
+          onRemove={() => {
+            const { iId, cabinetId } = treatmentInteractionWarning
+            setTreatmentInteractionWarning(null)
+            // Clear wizard selection so the user can't proceed with a doc
+            // that's about to be deleted out from under them.
+            if (formCabinetItemId === iId) {
+              selectCabinetItem('')
+            }
+            void deleteCabinetItem(hId, cabinetId, iId).catch(() => {})
+          }}
         />
       )}
 
