@@ -295,6 +295,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
         medicineName: slot.medicineName,
         memberName: slot.memberName,
         adminName: user.displayName ?? null,
+        scheduleType: slot.scheduleType,
       })
       setAdminMarkSlot(null)
     } catch {
@@ -530,12 +531,17 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
             medicineName: s.medicineName,
             doseAmount: s.doseAmount,
             doseUnit: s.doseUnit,
-            time: s.scheduledTime,
-            foodTiming: s.foodTiming,
+            // AK-131 — flexible-daily carries scheduledTime/foodTiming null
+            // on the summary; default to the 09:00 anchor / 'after' sentinel
+            // so DoseSlotDisplay's non-null contract holds. Renderers branch
+            // on scheduleType to display "Any time today" + skip food.
+            time: s.scheduledTime ?? '09:00',
+            foodTiming: s.foodTiming ?? 'after',
             regimenId: s.regimenId,
             slotId,
             patientId,
             cabinetItemId: s.cabinetItemId,
+            scheduleType: s.scheduleType,
           })
           if (s.status !== 'pending') {
             logs[slotId] = {
@@ -678,6 +684,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
         skipReason,
         lateNote,
         createdBy: user.uid,
+        scheduleType: slot.scheduleType,
       })
 
       if (status === 'taken' || status === 'late') {
@@ -894,9 +901,11 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                 !isAdminsOwnDose ? (beyondGrace ? 'missed' : 'pending') :
                                                 null
 
+                                              const isFlexible = dose.scheduleType === 'flexible-daily'
                                               let detail: string | null = null
                                               if (isLogged) {
-                                                if (log.status === 'taken')   detail = `Taken at ${formatTimeFriendly(dose.time)}`
+                                                if (log.status === 'taken')
+                                                  detail = isFlexible ? 'Taken today' : `Taken at ${formatTimeFriendly(dose.time)}`
                                                 if (log.status === 'late')    detail = lateDetail(log)
                                                 if (log.status === 'skipped') detail = log.skipReason ? `Skipped — ${log.skipReason}` : 'Skipped'
                                               }
@@ -924,11 +933,14 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                     ) : null
                                                   })()}
                                                   <div className="tr-dose-row">
-                                                    <span className="tr-dose-time">{dose.time}</span>
+                                                    <span className="tr-dose-time">
+                                                      {isFlexible ? 'Any time today' : dose.time}
+                                                    </span>
                                                     <div className="tr-dose-info">
                                                       <span className="tr-dose-medicine">{dose.medicineName}</span>
                                                       <span className="tr-dose-detail">
-                                                        {dose.doseAmount} {doseUnitLabel(dose.doseAmount, dose.doseUnit)} · {FOOD_LABELS[dose.foodTiming]}
+                                                        {dose.doseAmount} {doseUnitLabel(dose.doseAmount, dose.doseUnit)}
+                                                        {!isFlexible && ` · ${FOOD_LABELS[dose.foodTiming]}`}
                                                       </span>
                                                     </div>
                                                     {kind && (
@@ -962,14 +974,18 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                       >
                                                         <Check size={14} /> Taken
                                                       </button>
-                                                      <button
-                                                        type="button"
-                                                        className="tr-action tr-action--late"
-                                                        onClick={() => startLateMode(dose)}
-                                                        disabled={isPending}
-                                                      >
-                                                        <Clock size={14} /> Late
-                                                      </button>
+                                                      {/* AK-131 — late mode is meaningless when the slot has
+                                                          no fixed time; hide the button for flexible-daily. */}
+                                                      {!isFlexible && (
+                                                        <button
+                                                          type="button"
+                                                          className="tr-action tr-action--late"
+                                                          onClick={() => startLateMode(dose)}
+                                                          disabled={isPending}
+                                                        >
+                                                          <Clock size={14} /> Late
+                                                        </button>
+                                                      )}
                                                       <button
                                                         type="button"
                                                         className="tr-action tr-action--skip"

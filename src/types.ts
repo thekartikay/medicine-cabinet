@@ -184,7 +184,12 @@ export interface MasterMedicine {
 
 export type TreatmentCategory = 'acute' | 'chronic' | 'preventive' | 'prn'
 export type TreatmentStatus   = 'active' | 'paused' | 'completed'
-export type ScheduleType      = 'daily' | 'specific-days' | 'as-needed'
+// AK-131 — 'flexible-daily' = once per day at any time. The reminder fires
+// at the 09:00 IST anchor and markMissedDoses sweeps unfilled slots at the
+// 23:30 IST end-of-day cutoff. Persisted regimens carry slots: [] (mirrors
+// PRN); the Cloud Function synthesises one slot per day with a `-flex`
+// slotId suffix.
+export type ScheduleType      = 'daily' | 'specific-days' | 'as-needed' | 'flexible-daily'
 export type FoodTiming        = 'before' | 'after' | 'with'
 
 export interface TimeSlot {
@@ -252,6 +257,10 @@ export interface DoseSlotDisplay {
   slotId: string           // pre-computed via buildSlotId(); used as the log doc id
   patientId: string        // = treatment.memberId
   cabinetItemId: string    // = regimen.cabinetItemId
+  // AK-131 — Discriminator for the flexible-daily mode. Renderers swap a
+  // clock time for "Any time today" and suppress food-timing copy when this
+  // is 'flexible-daily'. Absent on fixed-time / PRN / specific-days slots.
+  scheduleType?: ScheduleType
 }
 
 // ── Today summary (Cloud-Function-maintained dashboard cache) ─
@@ -261,10 +270,17 @@ export interface TodaySummarySlot {
   treatmentName: string
   regimenId: string
   medicineName: string
-  scheduledTime: string         // "HH:MM"
+  // AK-131 — null when scheduleType is 'flexible-daily' (no fixed time).
+  // The reminder fires at the 09:00 IST anchor but the slot itself isn't
+  // tied to a specific HH:MM; the dashboard renders "Any time today" for
+  // these. All other modes carry the standard "HH:MM" string.
+  scheduledTime: string | null
   doseAmount: number
   doseUnit: string
-  foodTiming: FoodTiming
+  // AK-131 — null when scheduleType is 'flexible-daily' (food-timing is
+  // dropped because there's no anchored mealtime). All other modes carry
+  // a FoodTiming value.
+  foodTiming: FoodTiming | null
   // Extended beyond the spec so DoseSlotDisplay can be reconstructed without
   // a second read: cabinetItemId is required to debit inventory on "Mark as
   // taken", lateNote/createdBy back the existing log-state UI.
@@ -275,6 +291,10 @@ export interface TodaySummarySlot {
   lateNote: string | null
   adminOverride: boolean
   createdBy: string | null
+  // AK-131 — Stamped by maintainTodaySummary so renderers can detect the
+  // flexible-daily mode without inferring from scheduledTime === null.
+  // Absent on legacy docs predating this field.
+  scheduleType?: ScheduleType
 }
 
 export interface TodaySummaryStockAlert {

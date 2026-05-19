@@ -76,6 +76,8 @@ function regimenAppliesOn(reg: Regimen, dateStr: string): boolean {
   if (reg.endDate && reg.endDate < dateStr) return false
   if (reg.scheduleType === 'as-needed') return false
   if (reg.scheduleType === 'daily') return true
+  // AK-131 — flex regimens contribute one synthetic entry per day.
+  if (reg.scheduleType === 'flexible-daily') return true
   // specific-days: dow 0 = Sunday … 6 = Saturday
   const dow = new Date(dateStr + 'T00:00:00').getDay()
   return reg.scheduleDays?.includes(dow) ?? false
@@ -121,6 +123,26 @@ export function DoseHistory({ hId, onBack, filterUid }: Props) {
           for (const t of treatments) {
             for (const reg of regimensByTreatment[t.tId] ?? []) {
               if (!regimenAppliesOn(reg, date)) continue
+              // AK-131 — flex regimen: synthesize one entry per applicable
+              // day with the `-flex` slotId scheme used everywhere else.
+              if (reg.scheduleType === 'flexible-daily') {
+                const slotId = `${reg.tId}-${reg.rId}-${t.memberId}-${date}-flex`
+                const log = logBySlot[slotId]
+                const status: EntryStatus = log
+                  ? log.status
+                  : date === today ? 'pending' : 'missed'
+                entries.push({
+                  key: slotId,
+                  medicineName: reg.displayName,
+                  // Empty string is the sentinel for "render as 'Any time today'".
+                  scheduledTime: '',
+                  status,
+                  skipReason: log?.skipReason ?? null,
+                  patientId: t.memberId,
+                  memberName: t.memberName,
+                })
+                continue
+              }
               for (const slot of reg.slots) {
                 const slotId = buildSlotId(t, reg, slot.time, date)
                 const log = logBySlot[slotId]
@@ -142,7 +164,8 @@ export function DoseHistory({ hId, onBack, filterUid }: Props) {
               }
             }
           }
-          // Earliest slot first within a day.
+          // Earliest slot first within a day. Empty (flex) sorts before all
+          // fixed times — flex doses appear first within the day group.
           entries.sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime))
           const takenCount = entries.filter(e => e.status === 'taken' || e.status === 'late').length
           return {
@@ -257,7 +280,9 @@ export function DoseHistory({ hId, onBack, filterUid }: Props) {
                         <div className="dh-entry-info">
                           <span className="dh-entry-medicine">{e.medicineName}</span>
                           <span className="dh-entry-time">
-                            {formatTimeFriendly(e.scheduledTime)}
+                            {e.scheduledTime
+                              ? formatTimeFriendly(e.scheduledTime)
+                              : 'Any time today'}
                             {/* Show member name only when viewing all members (admin mode) */}
                             {!filterUid && activeFilter === 'all' && e.memberName && (
                               <> · <span className="dh-entry-member">{e.memberName}</span></>

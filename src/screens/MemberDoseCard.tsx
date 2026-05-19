@@ -285,6 +285,9 @@ export function MemberDoseCard({ user, household }: Props) {
             if (r.startDate > dateStr) continue
             if (r.endDate && r.endDate < dateStr) continue
             if (r.scheduleType === 'as-needed') continue
+            // AK-131 — flexible-daily contributes one expected dose per
+            // applicable day (slots is always empty for this mode).
+            if (r.scheduleType === 'flexible-daily') { expected += 1; continue }
             if (r.scheduleType === 'daily') { expected += r.slots.length; continue }
             if (r.scheduleDays?.includes(d.getDay())) expected += r.slots.length
           }
@@ -379,6 +382,7 @@ export function MemberDoseCard({ user, household }: Props) {
         status,
         skipReason,
         createdBy: user.uid,
+        scheduleType: slot.scheduleType,
       })
 
       if (status === 'taken' || status === 'late') {
@@ -487,7 +491,9 @@ export function MemberDoseCard({ user, household }: Props) {
               </span>
               {nextPending && (
                 <span className="md-progress-next">
-                  {formatTimeFriendly(nextPending.time)}
+                  {nextPending.scheduleType === 'flexible-daily'
+                    ? 'Any time'
+                    : formatTimeFriendly(nextPending.time)}
                 </span>
               )}
             </div>
@@ -506,19 +512,27 @@ export function MemberDoseCard({ user, household }: Props) {
           </div>
         )}
 
-        {nextPending ? (
+        {nextPending ? (() => {
+          const isFlexible = nextPending.scheduleType === 'flexible-daily'
+          return (
           <div
             className={`md-dose-card${confirmedSlot === nextPending.slotId ? ' md-dose-card--just-confirmed' : ''}`}
           >
             <div className="md-dose-time">
               <Clock size={16} />
-              <span>{formatTimeFriendly(nextPending.time)}</span>
+              <span>
+                {isFlexible ? 'Any time today' : formatTimeFriendly(nextPending.time)}
+              </span>
             </div>
             <div className="md-medicine">{nextPending.medicineName}</div>
             <div className="md-dose-detail">
               {nextPending.doseAmount} {unitLabel(nextPending.doseAmount, nextPending.doseUnit)}
-              {' · '}
-              {foodInline(nextPending.foodTiming)}
+              {!isFlexible && (
+                <>
+                  {' · '}
+                  {foodInline(nextPending.foodTiming)}
+                </>
+              )}
             </div>
 
             <div className="md-actions">
@@ -541,19 +555,24 @@ export function MemberDoseCard({ user, household }: Props) {
                   <X size={18} />
                   <span>{t('member.skip')}</span>
                 </button>
-                <button
-                  type="button"
-                  className="md-btn md-btn-secondary"
-                  onClick={() => openLateModal(nextPending)}
-                  disabled={pendingSlot === nextPending.slotId}
-                >
-                  <Clock size={18} />
-                  <span>{t('member.takeLater')}</span>
-                </button>
+                {/* AK-131 — late mode is meaningless when the slot has no
+                    fixed time; hide the button for flexible-daily. */}
+                {!isFlexible && (
+                  <button
+                    type="button"
+                    className="md-btn md-btn-secondary"
+                    onClick={() => openLateModal(nextPending)}
+                    disabled={pendingSlot === nextPending.slotId}
+                  >
+                    <Clock size={18} />
+                    <span>{t('member.takeLater')}</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
-        ) : allDoneForToday ? (
+          )
+        })() : allDoneForToday ? (
           <div className="md-done">
             <div className="md-done-tick" aria-hidden="true">
               <Check size={48} strokeWidth={3} />
@@ -573,25 +592,35 @@ export function MemberDoseCard({ user, household }: Props) {
         ) : null}
 
         {/* Persistent missed-dose card (separate from the focus card) */}
-        {missedToShow && (
-          <div className="md-missed-card">
-            <p className="md-missed-title">{t('member.missedTitle')}</p>
-            <p className="md-missed-medicine">{missedToShow.medicineName}</p>
-            <p className="md-missed-meta">
-              {formatTimeFriendly(missedToShow.time)} · {missedToShow.doseAmount}{' '}
-              {unitLabel(missedToShow.doseAmount, missedToShow.doseUnit)}
-            </p>
-            <button
-              type="button"
-              className="md-btn md-btn-amber"
-              onClick={() => openLateModal(missedToShow)}
-              disabled={pendingSlot === missedToShow.slotId}
-            >
-              <Clock size={18} />
-              <span>{t('member.markLateTaken')}</span>
-            </button>
-          </div>
-        )}
+        {missedToShow && (() => {
+          const isFlexible = missedToShow.scheduleType === 'flexible-daily'
+          return (
+            <div className="md-missed-card">
+              <p className="md-missed-title">{t('member.missedTitle')}</p>
+              <p className="md-missed-medicine">{missedToShow.medicineName}</p>
+              <p className="md-missed-meta">
+                {isFlexible ? 'Any time today' : formatTimeFriendly(missedToShow.time)}
+                {' · '}{missedToShow.doseAmount}{' '}
+                {unitLabel(missedToShow.doseAmount, missedToShow.doseUnit)}
+              </p>
+              {/* AK-131 — flex missed slots skip the late-modal (no fixed time
+                  to be late from). Tap-to-take logs it as 'taken' directly. */}
+              <button
+                type="button"
+                className="md-btn md-btn-amber"
+                onClick={() =>
+                  isFlexible
+                    ? handleLog(missedToShow, 'taken')
+                    : openLateModal(missedToShow)
+                }
+                disabled={pendingSlot === missedToShow.slotId}
+              >
+                <Clock size={18} />
+                <span>{t('member.markLateTaken')}</span>
+              </button>
+            </div>
+          )
+        })()}
 
         {/* ── Per-treatment adherence (Fix 5) ─────────────────────── */}
         {adherenceByTreatment.length > 0 && (

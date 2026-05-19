@@ -313,6 +313,60 @@ export const scheduleDoseNotifications = onSchedule(
             if (!days?.includes(dowIST)) continue
           }
 
+          // AK-131 — flexible-daily fires its reminder at the 09:00 IST anchor.
+          // The body copy reminds the user they can log the dose at any point
+          // in the day; the slotId carries the `-flex` suffix that pairs with
+          // the synthetic todaySummary slot.
+          if (scheduleType === 'flexible-daily') {
+            const flexTime = '09:00'
+            const slotInstant = istSlotInstant(todayIST, flexTime)
+            if (slotInstant < windowStart || slotInstant > windowEnd) continue
+            const slotId = `${tId}-${rId}-${patientId}-${todayIST}-flex`
+
+            const logSnap = await db
+              .doc(`households/${hId}/treatments/${tId}/logs/${slotId}`)
+              .get()
+            if (logSnap.exists) continue
+
+            const userData = await getUser(patientId)
+            if (!userData?.fcmToken) continue
+            if (userData.pushNotificationsEnabled === false) continue
+
+            const medicineName = (regimen.displayName as string | undefined)
+              ?? 'your medicine'
+
+            try {
+              await messaging.send({
+                token: userData.fcmToken,
+                notification: {
+                  title: `Time to take ${medicineName}`,
+                  body: `Any time today works.`,
+                },
+                data: {
+                  slotId,
+                  treatmentId: tId,
+                  householdId: hId,
+                  type: 'dose_reminder',
+                },
+                android: { priority: 'high' },
+                apns: {
+                  payload: {
+                    aps: { sound: 'default', badge: 1 },
+                  },
+                },
+              })
+            } catch (err: unknown) {
+              const code = (err as { code?: string })?.code
+              if (code === 'messaging/registration-token-not-registered') {
+                await db.doc(`users/${patientId}`).update({
+                  fcmToken: FieldValue.delete(),
+                })
+                userCache.delete(patientId)
+              }
+            }
+            continue
+          }
+
           const slots = (regimen.slots ?? []) as Array<{ time: string; foodTiming?: string }>
           for (const slot of slots) {
             if (typeof slot.time !== 'string' || !/^\d{2}:\d{2}$/.test(slot.time)) continue
@@ -633,6 +687,109 @@ export const markMissedDoses = onSchedule(
           if (scheduleType === 'as-needed') continue
 
           const slots = (regimen.slots ?? []) as Array<{ time: string; foodTiming?: string }>
+          // AK-131 — flexible-daily has no fixed slots but does need a missed
+          // sweep. The end-of-day cutoff is 23:30 IST (+ 30-min grace ⇒ marked
+          // missed shortly after midnight). The log's scheduledAt is recorded
+          // at the 09:00 IST anchor so the rest of the system reads it as a
+          // regular dose.
+          if (scheduleType === 'flexible-daily') {
+            for (const dateStr of dates) {
+              if (regimen.startDate && regimen.startDate > dateStr) continue
+              if (regimen.endDate && regimen.endDate < dateStr) continue
+
+              const endOfDayInstant = istSlotInstant(dateStr, '23:30')
+              if (endOfDayInstant > now) continue
+              if (endOfDayInstant >= cutoff) continue
+
+              const slotId = `${tId}-${rId}-${patientId}-${dateStr}-flex`
+              const logRef = db.doc(`households/${hId}/treatments/${tId}/logs/${slotId}`)
+              const scheduledAtFlex = istSlotInstant(dateStr, '09:00')
+
+              try {
+                await logRef.create({
+                  slotId,
+                  tId,
+                  rId,
+                  hId,
+                  patientId,
+                  scheduledAt: Timestamp.fromDate(scheduledAtFlex),
+                  scheduledDate: dateStr,
+                  scheduledTime: '09:00',
+                  status: 'missed',
+                  takenAt: null,
+                  skipReason: null,
+                  lateNote: null,
+                  doseAmount: regimen.doseAmount ?? 0,
+                  doseUnit: regimen.doseUnit ?? '',
+                  cabinetItemId: regimen.cabinetItemId ?? '',
+                  inventoryDebited: false,
+                  createdBy: 'system',
+                  createdAt: FieldValue.serverTimestamp(),
+                })
+              } catch (err: unknown) {
+                const code = (err as { code?: number | string })?.code
+                if (code === 6 || code === 'already-exists') continue
+                throw err
+              }
+
+              const medicineName = (regimen.displayName as string | undefined) ?? 'their medicine'
+              const patient = await getUser(patientId)
+              const patientName = (patient?.displayName as string | undefined) ?? 'A family member'
+
+              const notifId = `missed_${slotId}`
+              try {
+                await db.doc(`households/${hId}/notifications/${notifId}`).create({
+                  notifId,
+                  type: 'missed_dose',
+                  message: `${patientName} missed their ${medicineName} (any-time-today)`,
+                  createdAt: FieldValue.serverTimestamp(),
+                  readBy: [],
+                  relatedMemberId: patientId,
+                  relatedMedicineId: (regimen.cabinetItemId as string | undefined) ?? null,
+                })
+              } catch {
+                // Same swallow as the fixed-time branch — admin still sees the
+                // missed log in the dashboard.
+              }
+
+              for (const adminId of adminIds) {
+                const adminData = await getUser(adminId)
+                if (!adminData?.fcmToken) continue
+                if (adminData.pushNotificationsEnabled === false) continue
+
+                try {
+                  await messaging.send({
+                    token: adminData.fcmToken as string,
+                    notification: {
+                      title: `Missed dose — ${patientName}`,
+                      body: `${patientName} didn't take their ${medicineName} today`,
+                    },
+                    data: {
+                      type: 'missed_dose',
+                      householdId: hId,
+                      treatmentId: tId,
+                      slotId,
+                      patientId,
+                    },
+                    android: { priority: 'high' },
+                    apns: {
+                      payload: { aps: { sound: 'default', badge: 1 } },
+                    },
+                  })
+                } catch (err: unknown) {
+                  const code = (err as { code?: string })?.code
+                  if (code === 'messaging/registration-token-not-registered') {
+                    await db.doc(`users/${adminId}`).update({
+                      fcmToken: FieldValue.delete(),
+                    })
+                    userCache.delete(adminId)
+                  }
+                }
+              }
+            }
+            continue
+          }
+
           if (slots.length === 0) continue
 
           for (const dateStr of dates) {
@@ -900,10 +1057,12 @@ interface TSSlot {
   treatmentName: string
   regimenId: string
   medicineName: string
-  scheduledTime: string
+  // AK-131 — null when scheduleType is 'flexible-daily' (no fixed time).
+  scheduledTime: string | null
   doseAmount: number
   doseUnit: string
-  foodTiming: string
+  // AK-131 — null when scheduleType is 'flexible-daily' (food timing dropped).
+  foodTiming: string | null
   cabinetItemId: string
   status: 'taken' | 'late' | 'skipped' | 'missed' | 'pending'
   loggedAt: FirebaseFirestore.Timestamp | null
@@ -911,6 +1070,9 @@ interface TSSlot {
   lateNote: string | null
   adminOverride: boolean
   createdBy: string | null
+  // AK-131 — Discriminator so the client renderer can detect flexible-daily
+  // without inferring from scheduledTime. Absent on legacy slot docs.
+  scheduleType?: string
 }
 
 interface TSStockAlert {
@@ -1063,6 +1225,43 @@ async function buildTodaySummaryForHousehold(
       const slotsPerDay = slots.length
       const doseAmount = r.doseAmount ?? 0
       const cabinetItemId = r.cabinetItemId ?? ''
+
+      // AK-131 — flexible-daily synthesises exactly one slot per day with a
+      // `-flex` slotId, scheduledTime/foodTiming null, and the scheduleType
+      // discriminator. Counts as one dose toward daysSupply.
+      if (scheduleType === 'flexible-daily') {
+        const slotId = `${tId}-${rId}-${patientId}-${date}-flex`
+        member.slots[slotId] = {
+          treatmentId: tId,
+          treatmentName: t.name ?? 'Treatment',
+          regimenId: rId,
+          medicineName: r.displayName ?? 'Medicine',
+          scheduledTime: null,
+          doseAmount,
+          doseUnit: r.doseUnit ?? '',
+          foodTiming: null,
+          cabinetItemId,
+          status: 'pending',
+          loggedAt: null,
+          skipReason: null,
+          lateNote: null,
+          adminOverride: false,
+          createdBy: null,
+          scheduleType: 'flexible-daily',
+        }
+        if (cabinetItemId && doseAmount > 0) {
+          let perItem = dailyAmountByMemberAndItem.get(patientId)
+          if (!perItem) {
+            perItem = new Map()
+            dailyAmountByMemberAndItem.set(patientId, perItem)
+          }
+          perItem.set(
+            cabinetItemId,
+            (perItem.get(cabinetItemId) ?? 0) + doseAmount,
+          )
+        }
+        continue
+      }
 
       // Track daily amount for daysSupply.
       if (cabinetItemId && doseAmount > 0 && slotsPerDay > 0) {

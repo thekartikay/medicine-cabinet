@@ -80,6 +80,9 @@ const SCHEDULE_LABELS: Record<ScheduleType, string> = {
   daily: 'Daily',
   'specific-days': 'Specific days',
   'as-needed': 'As needed',
+  // AK-131 — Once-a-day, no fixed time. Reminder fires at the 09:00 IST
+  // anchor; the user can log the dose any time before end-of-day.
+  'flexible-daily': 'Once a day, any time',
 }
 
 const FOOD_LABELS: Record<FoodTiming, string> = {
@@ -210,9 +213,14 @@ function generatePastSlots(
   patientId: string,
   tId: string,
   rId: string,
+  scheduleType: ScheduleType = 'daily',
 ): { slots: RetroSlot[]; wasCapped: boolean } {
   const today = todayISTString()
-  if (startDate >= today || slots.length === 0) {
+  // AK-131 — flexible-daily carries no fixed slots; emit one synthetic
+  // slot per past day instead. Any other mode with empty slots stays a
+  // no-op (this guard previously short-circuited all flexible regimens).
+  const isFlexible = scheduleType === 'flexible-daily'
+  if (startDate >= today || (!isFlexible && slots.length === 0)) {
     return { slots: [], wasCapped: false }
   }
   // Iterate dates anchored at noon IST. UTC-day increments are unambiguous
@@ -245,6 +253,20 @@ function generatePastSlots(
   const out: RetroSlot[] = []
   for (const date of dates) {
     const displayDate = fmtDate(date)
+    if (isFlexible) {
+      // Mirrors the Cloud Function slotId scheme so logRetroactiveDoses
+      // and maintainTodaySummary address the same doc. The synthetic time
+      // '09:00' matches the reminder/scheduledAt anchor.
+      out.push({
+        slotId: `${tId}-${rId}-${patientId}-${date}-flex`,
+        date,
+        displayDate,
+        time: '09:00',
+        foodTiming: 'after',
+        scheduleType: 'flexible-daily',
+      })
+      continue
+    }
     for (const slot of slots) {
       const hhmm = slot.time.replace(':', '')
       out.push({
@@ -308,6 +330,7 @@ function detectConflict(
 
 function summarize(scheduleType: ScheduleType, days: number[], slots: TimeSlot[]): string {
   if (scheduleType === 'as-needed') return 'As needed'
+  if (scheduleType === 'flexible-daily') return 'Once a day, any time'
   const times = slots.map(s => s.time).join(', ')
   if (scheduleType === 'daily') return `Daily at ${times}`
   const dayList = days.slice().sort((a, b) => a - b).map(d => DAY_NAMES[d]).join(', ')
@@ -625,6 +648,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
             if (r.startDate > dateStr) continue
             if (r.endDate && r.endDate < dateStr) continue
             if (r.scheduleType === 'as-needed') continue
+            // AK-131 — flexible-daily contributes exactly one expected dose per
+            // applicable day, regardless of slots.length (which is always 0).
+            if (r.scheduleType === 'flexible-daily') { expected += 1; continue }
             if (r.scheduleType === 'daily') { expected += r.slots.length; continue }
             // specific-days
             const dow = d.getDay()
@@ -693,11 +719,15 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     if (v === 'step3') {
       if (formScheduleType === 'specific-days' && formScheduleDays.length === 0)
         return 'Select at least one day.'
-      if (formScheduleType !== 'as-needed' && formSlots.length === 0)
+      // AK-131 — flexible-daily carries no fixed slots, so the empty-slot
+      // and duplicate-time checks are skipped alongside PRN.
+      const isTimeDriven =
+        formScheduleType !== 'as-needed' && formScheduleType !== 'flexible-daily'
+      if (isTimeDriven && formSlots.length === 0)
         return 'Add at least one dose time.'
       // AK-122 — safety net for slots that drift into a duplicate time via
       // direct time-input edits after the addSlot guard.
-      if (formScheduleType !== 'as-needed') {
+      if (isTimeDriven) {
         const slotTimes = formSlots.map(s => s.time)
         if (new Set(slotTimes).size !== slotTimes.length) {
           return 'Each dose time must be unique.'
@@ -946,7 +976,12 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         doseUnit: formDoseUnit,
         scheduleType: formScheduleType,
         scheduleDays: formScheduleType === 'specific-days' ? formScheduleDays : null,
-        slots: formScheduleType === 'as-needed' ? [] : formSlots,
+        // AK-131 — flexible-daily mirrors PRN's empty-slots persistence;
+        // the Cloud Function synthesises the per-day slot from scheduleType.
+        slots:
+          formScheduleType === 'as-needed' || formScheduleType === 'flexible-daily'
+            ? []
+            : formSlots,
         startDate: formStartDate,
         endDate: formOngoing ? null : (formEndDate || null),
         ongoing: formOngoing,
@@ -983,6 +1018,7 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
           formMemberId,
           tId,
           rId,
+          formScheduleType,
         )
         if (generated.slots.length > 0) {
           const initialChecks: Record<string, boolean> = {}
@@ -2315,7 +2351,16 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
             </div>
           )}
 
-          {formScheduleType !== 'as-needed' && (
+          {formScheduleType === 'flexible-daily' && (
+            <div className="cb-field">
+              <p className="cb-hint">
+                A reminder will go out at 9 AM each day. Log the dose any time before
+                the day ends.
+              </p>
+            </div>
+          )}
+
+          {formScheduleType !== 'as-needed' && formScheduleType !== 'flexible-daily' && (
             <div className="cb-field">
               <span className="cb-label">Dose times</span>
               <div className="tr-slot-list">

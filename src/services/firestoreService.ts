@@ -315,6 +315,9 @@ function computeScheduleSummary(
   slots: TimeSlot[],
 ): string {
   if (scheduleType === "as-needed") return "As needed"
+  // AK-131 — flexible-daily carries no fixed times; the list view uses this
+  // string verbatim on the Treatments list card.
+  if (scheduleType === "flexible-daily") return "Once a day, any time"
   const times = slots.map(s => s.time).join(", ")
   if (scheduleType === "daily") return `Daily at ${times}`
   const days = (scheduleDays ?? []).slice().sort((a, b) => a - b).map(d => DAY_NAMES[d]).join(", ")
@@ -481,6 +484,27 @@ export async function loadTodaysDoses(hId: string): Promise<DoseSlotDisplay[]> {
       if (reg.scheduleType === "as-needed") continue
       if (reg.scheduleType === "specific-days" && !reg.scheduleDays?.includes(todayDow)) continue
 
+      // AK-131 — flex regimens carry no fixed slots; emit one synthetic
+      // dose anchored at 09:00 IST. Mirrors the Cloud Function slotId.
+      if (reg.scheduleType === 'flexible-daily') {
+        all.push({
+          treatmentId: treat.tId,
+          treatmentName: treat.name,
+          memberName: treat.memberName,
+          medicineName: reg.displayName,
+          doseAmount: reg.doseAmount,
+          doseUnit: reg.doseUnit,
+          time: '09:00',
+          foodTiming: 'after',
+          regimenId: reg.rId,
+          slotId: `${treat.tId}-${reg.rId}-${treat.memberId}-${today}-flex`,
+          patientId: treat.memberId,
+          cabinetItemId: reg.cabinetItemId,
+          scheduleType: 'flexible-daily',
+        })
+        continue
+      }
+
       for (const slot of reg.slots) {
         const hhmm = slot.time.replace(':', '')
         const slotId = buildSlotId(treat.tId, reg.rId, treat.memberId, today, hhmm)
@@ -553,6 +577,13 @@ export async function logDose(
     skipReason?: string | null
     lateNote?: string | null
     createdBy: string
+    // AK-131 — When 'flexible-daily', the slotId carries a `-flex` suffix
+    // instead of the HHmm tail so it pairs with the synthetic slot
+    // maintainTodaySummary writes. Caller should still pass scheduledTime
+    // as the 09:00 IST anchor so scheduledAt + audit-fence behaviour stays
+    // consistent with fixed-time slots. Any other value (or absent) falls
+    // through the standard HHmm path.
+    scheduleType?: ScheduleType
   },
 ): Promise<{
   slotId: string
@@ -562,8 +593,12 @@ export async function logDose(
   actualDebit: number
 }> {
   const cId = await getOrCreateDefaultCabinet(hId)
-  const hhmm = args.scheduledTime.replace(":", "")
-  const slotId = buildSlotId(args.tId, args.rId, args.patientId, args.scheduledDate, hhmm)
+  const slotId = args.scheduleType === 'flexible-daily'
+    ? `${args.tId}-${args.rId}-${args.patientId}-${args.scheduledDate}-flex`
+    : buildSlotId(
+        args.tId, args.rId, args.patientId,
+        args.scheduledDate, args.scheduledTime.replace(":", ""),
+      )
   const scheduledAt = new Date(`${args.scheduledDate}T${args.scheduledTime}:00+05:30`)
 
   return runTransaction(db, async tx => {
@@ -710,6 +745,9 @@ export async function adminMarkAsTaken(
     medicineName: string
     memberName: string | null
     adminName: string | null
+    // AK-131 — Same `-flex` slotId switch as logDose. See that function
+    // for the design rationale.
+    scheduleType?: ScheduleType
   },
 ): Promise<{
   slotId: string
@@ -719,8 +757,12 @@ export async function adminMarkAsTaken(
   actualDebit: number
 }> {
   const cId = await getOrCreateDefaultCabinet(hId)
-  const hhmm = args.scheduledTime.replace(":", "")
-  const slotId = buildSlotId(args.tId, args.rId, args.patientId, args.scheduledDate, hhmm)
+  const slotId = args.scheduleType === 'flexible-daily'
+    ? `${args.tId}-${args.rId}-${args.patientId}-${args.scheduledDate}-flex`
+    : buildSlotId(
+        args.tId, args.rId, args.patientId,
+        args.scheduledDate, args.scheduledTime.replace(":", ""),
+      )
   const scheduledAt = new Date(`${args.scheduledDate}T${args.scheduledTime}:00+05:30`)
 
   return runTransaction(db, async tx => {

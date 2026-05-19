@@ -1,4 +1,4 @@
-import type { FoodTiming } from '../types'
+import type { FoodTiming, ScheduleType } from '../types'
 
 // AK-121 — Bottom sheet that opens after the user picks "log past doses" on
 // the PastDateModal and the new treatment + regimen have been saved. Lets
@@ -12,6 +12,11 @@ export interface RetroSlot {
   displayDate: string  // human-friendly date label
   time: string         // HH:MM
   foodTiming: FoodTiming
+  // AK-131 — When 'flexible-daily', the row renders "Any time today" and
+  // suppresses the food-timing label. Time + foodTiming still carry
+  // sentinel values so the existing logRetroactiveDoses path doesn't need
+  // to special-case the input shape.
+  scheduleType?: ScheduleType
 }
 
 interface RetroLogSheetProps {
@@ -76,6 +81,7 @@ export function RetroLogSheet({
               <h4 className="retro-day-header">{displayDate}</h4>
               {items.map((s) => {
                 const checked = checks[s.slotId] ?? true
+                const isFlexible = s.scheduleType === 'flexible-daily'
                 return (
                   <label key={s.slotId} className="retro-row">
                     <input
@@ -84,10 +90,14 @@ export function RetroLogSheet({
                       checked={checked}
                       onChange={() => onToggle(s.slotId)}
                     />
-                    <span className="retro-row-time">{s.time}</span>
-                    <span className="retro-row-food">
-                      {FOOD_LABELS[s.foodTiming]}
+                    <span className="retro-row-time">
+                      {isFlexible ? 'Any time today' : s.time}
                     </span>
+                    {!isFlexible && (
+                      <span className="retro-row-food">
+                        {FOOD_LABELS[s.foodTiming]}
+                      </span>
+                    )}
                   </label>
                 )
               })}
