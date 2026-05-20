@@ -1075,6 +1075,48 @@ export async function endTreatment(
   })
 }
 
+// AK-138 — Narrow treatment-level edit. The whitelist is intentionally
+// tight: only `name` is exposed today. Adding more fields here requires a
+// matching rules-allowlist update plus an onTreatmentWritten guard review,
+// since most other treatment fields (status, endDate, pauseHistory) have
+// dedicated transactions that own their write surface.
+export async function updateTreatment(
+  hId: string,
+  tId: string,
+  updates: { name?: string },
+): Promise<void> {
+  const payload: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  }
+  if (updates.name !== undefined) payload.name = updates.name
+  await updateDoc(doc(db, treatmentPath(hId, tId)), payload)
+}
+
+// AK-138 — Narrow regimen-level edit. doseAmount/endDate/ongoing are the
+// only fields the edit sheet exposes today. Mid-day edits flow through to
+// the dashboard via the onRegimenWritten trigger which rebuilds today's
+// summary. Existing dose logs are NOT rewritten — each log captured its
+// own historical doseAmount at write time and stays as the source of truth
+// for that slot's history.
+export async function updateRegimen(
+  hId: string,
+  tId: string,
+  rId: string,
+  updates: {
+    doseAmount?: number
+    endDate?: string | null
+    ongoing?: boolean
+  },
+): Promise<void> {
+  const payload: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  }
+  if (updates.doseAmount !== undefined) payload.doseAmount = updates.doseAmount
+  if (updates.endDate !== undefined) payload.endDate = updates.endDate
+  if (updates.ongoing !== undefined) payload.ongoing = updates.ongoing
+  await updateDoc(doc(db, regimenPath(hId, tId, rId)), payload)
+}
+
 
 // ── Batch 3 additions ────────────────────────────────────────
 

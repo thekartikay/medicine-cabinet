@@ -27,6 +27,8 @@ import {
   searchMasterDb,
   updateCabinetItemInteractionWarning,
   deleteCabinetItem,
+  updateTreatment,
+  updateRegimen,
 } from '../services/firestoreService'
 import { buildSlotId } from '../lib/paths'
 import { checkCabinetInteractions } from '../services/geminiService'
@@ -50,7 +52,7 @@ import type {
   TreatmentStatus,
 } from '../types'
 
-type TxView = 'list' | 'step1' | 'step2' | 'step3' | 'step4'
+type TxView = 'list' | 'step1' | 'step2' | 'step3' | 'step4' | 'edit'
 
 interface Props {
   hId: string
@@ -451,6 +453,31 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   // successful inline add. Auto-clears after 3s via the effect below.
   const [inlineAddSuccess, setInlineAddSuccess] = useState('')
 
+  // AK-138 — Edit sheet state. The sheet is keyed off `view === 'edit'`;
+  // editingTId tracks which treatment is being edited and persists across
+  // re-renders during save. editRegimenId switches between regimens when a
+  // treatment has more than one (regimen picker — auto-selected when N=1).
+  // Original values are snapshotted at open time so the Save button can
+  // diff against them to know whether anything changed.
+  const [editingTId, setEditingTId] = useState<string | null>(null)
+  const [editRegimenId, setEditRegimenId] = useState<string>('')
+  const [editName, setEditName] = useState('')
+  const [editDoseAmount, setEditDoseAmount] = useState('')
+  const [editEndDate, setEditEndDate] = useState('')
+  const [editOngoing, setEditOngoing] = useState(true)
+  const [editOriginal, setEditOriginal] = useState<{
+    name: string
+    doseAmount: string
+    endDate: string
+    ongoing: boolean
+  } | null>(null)
+  const [editSaving, setEditSaving] = useState(false)
+  const [editError, setEditError] = useState('')
+  // AK-138 — Mirrors the AK-132 affirmation pattern: a short success flash
+  // shown briefly after the sheet closes so the user has visual confirmation
+  // the save landed before the Firestore subscription's re-render arrives.
+  const [editSavedMessage, setEditSavedMessage] = useState('')
+
   // AK-124 (replicated for AK-133) — Cross-member active-treatment interaction
   // warning surfaced after an inline add. Mirrors Cabinet.tsx's state shape so
   // the same TreatmentInteractionWarningModal can render against it.
@@ -503,6 +530,121 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
       setActionPending(false)
       setDeleteConfirm(null)
       setDeleteConfirmText('')
+    }
+  }
+
+  // AK-138 — Open the edit sheet for the currently-selected treatment.
+  // Pre-fills every field from the first regimen (or the only one). The
+  // original-values snapshot drives the Save-button enable check.
+  function openEditSheet(t: Treatment) {
+    const regs = regimensByTId[t.tId] ?? []
+    if (regs.length === 0) return  // can't edit a treatment with no regimens
+    const firstReg = regs[0]
+    const reEnd = firstReg.endDate ?? ''
+    setEditingTId(t.tId)
+    setEditRegimenId(firstReg.rId)
+    setEditName(t.name)
+    setEditDoseAmount(String(firstReg.doseAmount))
+    setEditEndDate(reEnd)
+    setEditOngoing(firstReg.ongoing)
+    setEditOriginal({
+      name: t.name,
+      doseAmount: String(firstReg.doseAmount),
+      endDate: reEnd,
+      ongoing: firstReg.ongoing,
+    })
+    setEditError('')
+    setView('edit')
+  }
+
+  // AK-138 — Switch the per-regimen fields when the user picks a different
+  // regimen in a multi-regimen treatment. Treatment-level (name) state is
+  // unaffected; only the dose/endDate/ongoing snapshot is replaced.
+  function switchEditRegimen(rId: string) {
+    if (!editingTId) return
+    const regs = regimensByTId[editingTId] ?? []
+    const reg = regs.find(r => r.rId === rId)
+    if (!reg) return
+    const reEnd = reg.endDate ?? ''
+    setEditRegimenId(rId)
+    setEditDoseAmount(String(reg.doseAmount))
+    setEditEndDate(reEnd)
+    setEditOngoing(reg.ongoing)
+    setEditOriginal(prev => prev ? {
+      ...prev,
+      doseAmount: String(reg.doseAmount),
+      endDate: reEnd,
+      ongoing: reg.ongoing,
+    } : null)
+  }
+
+  function cancelEdit() {
+    setView('list')
+    setEditingTId(null)
+    setEditError('')
+    // selectedTreatmentId stays set → detail sheet reappears underneath.
+  }
+
+  async function handleEditSave() {
+    if (!editingTId || !editRegimenId || !editOriginal) return
+    const t = treatments.find(x => x.tId === editingTId)
+    if (!t) return
+    const regs = regimensByTId[t.tId] ?? []
+    const reg = regs.find(r => r.rId === editRegimenId)
+    if (!reg) { setEditError('Could not load this regimen.'); return }
+
+    // Validation
+    const trimmedName = editName.trim()
+    if (!trimmedName) { setEditError('Treatment name is required.'); return }
+    const doseNum = parseFloat(editDoseAmount)
+    if (isNaN(doseNum) || doseNum <= 0) {
+      setEditError('Dose amount must be a positive number.')
+      return
+    }
+    let resolvedEndDate: string | null = null
+    if (!editOngoing) {
+      if (!editEndDate) {
+        setEditError('Set an end date or choose ongoing.')
+        return
+      }
+      if (editEndDate <= reg.startDate) {
+        setEditError('End date must be after the treatment start date.')
+        return
+      }
+      // Past-date warning is informational — user may be correcting history.
+      resolvedEndDate = editEndDate
+    }
+
+    setEditError('')
+    setEditSaving(true)
+
+    const promises: Promise<unknown>[] = []
+    if (trimmedName !== editOriginal.name) {
+      promises.push(updateTreatment(hId, editingTId, { name: trimmedName }))
+    }
+    const regUpdates: Parameters<typeof updateRegimen>[3] = {}
+    if (editDoseAmount !== editOriginal.doseAmount) {
+      regUpdates.doseAmount = doseNum
+    }
+    if (editOngoing !== editOriginal.ongoing || editEndDate !== editOriginal.endDate) {
+      regUpdates.ongoing = editOngoing
+      regUpdates.endDate = resolvedEndDate
+    }
+    if (Object.keys(regUpdates).length > 0) {
+      promises.push(updateRegimen(hId, editingTId, editRegimenId, regUpdates))
+    }
+
+    try {
+      await Promise.all(promises)
+      setEditSavedMessage('Saved.')
+      setEditSaving(false)
+      setEditingTId(null)
+      setView('list')
+      // selectedTreatmentId stays set → detail sheet refreshes itself once
+      // the regimen / treatment subscriptions fire with the new data.
+    } catch {
+      setEditError('Could not save changes. Please try again.')
+      setEditSaving(false)
     }
   }
 
@@ -598,6 +740,13 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     const t = setTimeout(() => setInlineAddSuccess(''), 3000)
     return () => clearTimeout(t)
   }, [inlineAddSuccess])
+
+  // AK-138 — same auto-clear pattern for the post-save edit confirmation.
+  useEffect(() => {
+    if (!editSavedMessage) return
+    const t = setTimeout(() => setEditSavedMessage(''), 2500)
+    return () => clearTimeout(t)
+  }, [editSavedMessage])
 
   // Per-treatment adherence over the trailing 7 days, plus the latest end-date
   // across that treatment's regimens (used for "X days remaining" on acute
@@ -761,6 +910,9 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     }
     const next: Record<TxView, TxView> = {
       list: 'step1', step1: 'step2', step2: 'step3', step3: 'step4', step4: 'step4',
+      // AK-138 — Edit view doesn't participate in goNext (it has its own
+      // Save handler) but the map needs full coverage for the union.
+      edit: 'edit',
     }
 
     // AK-39 sub-task 2 — Soft interaction check at the step2 → step3 boundary
@@ -905,6 +1057,7 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setStepError('')
     const prev: Record<TxView, TxView> = {
       list: 'list', step1: 'list', step2: 'step1', step3: 'step2', step4: 'step3',
+      edit: 'list',
     }
     setView(prev[view])
   }
@@ -1349,7 +1502,10 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     'Confirm treatment'
 
   // ── List view ───────────────────────────────────────────────
-  if (view === 'list') {
+  // AK-138 — Edit reuses the list-view shell so the detail sheet beneath the
+  // edit overlay stays mounted; setView('edit') flips the visible sheet
+  // without unmounting list state.
+  if (view === 'list' || view === 'edit') {
     const today = todayISTString()
     const visibleTreatments = filterByPatientUid
       ? treatments.filter(t => t.memberId === filterByPatientUid)
@@ -1526,6 +1682,19 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
           )}
         </div>
 
+        {/* AK-138 — Post-save "Saved." flash. Mirrors the AK-132 affirmation
+            styling so the visual language stays consistent. Auto-clears via
+            the effect above. */}
+        {editSavedMessage && (
+          <p
+            className="tr-confirm-message"
+            role="status"
+            style={{ textAlign: 'center', margin: '4px 0 8px' }}
+          >
+            {editSavedMessage}
+          </p>
+        )}
+
         {loadingList && (
           <div className="cb-loader"><div className="cb-spinner" role="status" aria-label="Loading" /></div>
         )}
@@ -1594,7 +1763,10 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         )}
 
         {/* ── Treatment detail bottom sheet (Fix 3) ───────────────── */}
-        {(() => {
+        {/* AK-138 — Suppress the detail sheet when the edit sheet is open so
+            both don't stack. selectedTreatmentId stays set during edit so
+            the detail sheet reappears underneath on Cancel / Save. */}
+        {view !== 'edit' && (() => {
           const t = selectedTreatmentId
             ? treatments.find(x => x.tId === selectedTreatmentId)
             : null
@@ -1695,7 +1867,12 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
 
                 <div className="bs-actions">
                   {!readOnly && (
-                    <button type="button" className="bs-btn bs-btn--secondary" disabled>
+                    <button
+                      type="button"
+                      className="bs-btn bs-btn--secondary"
+                      onClick={() => openEditSheet(t)}
+                      disabled={regs.length === 0}
+                    >
                       Edit
                     </button>
                   )}
@@ -1705,6 +1882,171 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
                     onClick={() => setSelectedTreatmentId(null)}
                   >
                     Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* AK-138 — Edit sheet. Same overlay/sheet pattern as the detail
+            sheet so the visual language stays consistent; opens via the
+            Edit button in the detail-sheet action row. */}
+        {view === 'edit' && editingTId && (() => {
+          const t = treatments.find(x => x.tId === editingTId)
+          if (!t) return null
+          const regs = regimensByTId[t.tId] ?? []
+          const selectedReg = regs.find(r => r.rId === editRegimenId)
+          const isMultiReg = regs.length > 1
+
+          // Dirty check — Save only enables when something actually changed.
+          const trimmedName = editName.trim()
+          const hasChanges = editOriginal != null && (
+            trimmedName !== editOriginal.name ||
+            editDoseAmount !== editOriginal.doseAmount ||
+            editEndDate !== editOriginal.endDate ||
+            editOngoing !== editOriginal.ongoing
+          )
+
+          // Past-date informational warning. The validator allows the save;
+          // the warning just nudges the admin in case they typo'd.
+          const todayIST = todayISTString()
+          const showPastDateWarning =
+            !editOngoing
+            && editEndDate !== ''
+            && editEndDate < todayIST
+            && t.status === 'active'
+
+          return (
+            <div
+              className="bs-overlay"
+              onClick={editSaving ? undefined : cancelEdit}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="tr-edit-title"
+            >
+              <div className="bs-sheet" onClick={e => e.stopPropagation()}>
+                <span className="bs-handle" aria-hidden="true" />
+                <h2 id="tr-edit-title" className="bs-title">Edit treatment</h2>
+                <p className="bs-meta-line">
+                  {t.memberName ?? 'Unknown member'}
+                  {' · '}
+                  <span className={`md-cat-badge md-cat-badge--${t.category}`}>
+                    {CATEGORY_LABELS[t.category]}
+                  </span>
+                </p>
+
+                <div className="cb-form" style={{ marginTop: 12 }}>
+                  <div className="cb-field">
+                    <label className="cb-label" htmlFor="tr-edit-name">Treatment name</label>
+                    <input
+                      id="tr-edit-name"
+                      className="cb-input"
+                      type="text"
+                      value={editName}
+                      onChange={e => setEditName(e.target.value)}
+                      maxLength={80}
+                    />
+                  </div>
+
+                  {isMultiReg && (
+                    <div className="cb-field">
+                      <label className="cb-label" htmlFor="tr-edit-regimen">Which medicine?</label>
+                      <select
+                        id="tr-edit-regimen"
+                        className="cb-input cb-select"
+                        value={editRegimenId}
+                        onChange={e => switchEditRegimen(e.target.value)}
+                      >
+                        {regs.map(r => (
+                          <option key={r.rId} value={r.rId}>{r.displayName}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {selectedReg && (
+                    <>
+                      <div className="cb-field">
+                        <label className="cb-label" htmlFor="tr-edit-dose">
+                          Dose amount ({selectedReg.doseUnit}
+                          {selectedReg.doseUnit !== 'ml' && parseFloat(editDoseAmount) !== 1 ? 's' : ''})
+                        </label>
+                        <input
+                          id="tr-edit-dose"
+                          className="cb-input"
+                          type="number"
+                          inputMode="decimal"
+                          min="0"
+                          step="0.5"
+                          value={editDoseAmount}
+                          onChange={e => setEditDoseAmount(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="cb-field">
+                        <label className="cb-label">Duration</label>
+                        <label className="cb-checkbox-row" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={editOngoing}
+                            onChange={e => {
+                              const next = e.target.checked
+                              setEditOngoing(next)
+                              if (next) setEditEndDate('')
+                            }}
+                          />
+                          <span>Ongoing (no end date)</span>
+                        </label>
+                      </div>
+
+                      {!editOngoing && (
+                        <div className="cb-field">
+                          <label className="cb-label" htmlFor="tr-edit-end">End date</label>
+                          <input
+                            id="tr-edit-end"
+                            className="cb-input"
+                            type="date"
+                            min={selectedReg.startDate}
+                            value={editEndDate}
+                            onChange={e => setEditEndDate(e.target.value)}
+                          />
+                          {showPastDateWarning && (
+                            <p
+                              className="cb-hint"
+                              role="status"
+                              style={{ color: '#B45309', marginTop: 4 }}
+                            >
+                              That date has already passed — the treatment will
+                              be marked completed once you save.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {editError && (
+                    <p className="cb-form-error" role="alert">{editError}</p>
+                  )}
+                </div>
+
+                <div className="bs-actions">
+                  <button
+                    type="button"
+                    className="bs-btn bs-btn--secondary"
+                    onClick={cancelEdit}
+                    disabled={editSaving}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="bs-btn bs-btn--primary"
+                    onClick={handleEditSave}
+                    disabled={!hasChanges || editSaving}
+                  >
+                    {editSaving ? 'Saving…' : 'Save'}
                   </button>
                 </div>
               </div>

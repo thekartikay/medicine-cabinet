@@ -1840,3 +1840,42 @@ export const onTreatmentWritten = onDocumentWritten(
     await buildTodaySummaryForHousehold(hId, todayIST)
   },
 )
+
+// AK-138 — Trigger E: regimen written → rebuild today's summary so mid-day
+// edits to doseAmount / endDate / ongoing propagate to the dashboard
+// immediately rather than waiting for the 00:00 IST rebuild cron.
+//
+// buildTodaySummaryForHousehold writes to `todaySummary/{date}` — it does
+// not write to regimens — so there is no write-back loop between this
+// trigger and the summary builder. The skip-on-no-op guard below also
+// avoids redundant rebuilds when the trigger fires for cosmetic field
+// changes (e.g., the createdAt server-stamp being filled in).
+export const onRegimenWritten = onDocumentWritten(
+  {
+    document: 'households/{hId}/treatments/{tId}/regimens/{rId}',
+    region: 'asia-south1',
+  },
+  async (event) => {
+    const hId = event.params.hId
+    const before = event.data?.before?.data()
+    const after = event.data?.after?.data()
+    if (!event.data?.before?.exists && !event.data?.after?.exists) return
+
+    // Only rebuild when a field that actually shapes today's slot composition
+    // changed. Skips no-op snapshots (e.g., serverTimestamp materialization)
+    // and edits to bookkeeping fields like updatedAt.
+    const fieldsThatAffectToday = [
+      'doseAmount', 'doseUnit', 'scheduleType', 'scheduleDays', 'slots',
+      'startDate', 'endDate', 'ongoing', 'cabinetItemId', 'displayName',
+    ] as const
+    const anyRelevantChange = fieldsThatAffectToday.some(
+      (k) => JSON.stringify(before?.[k]) !== JSON.stringify(after?.[k]),
+    )
+    const docDeletedOrCreated =
+      event.data?.before?.exists !== event.data?.after?.exists
+    if (!anyRelevantChange && !docDeletedOrCreated) return
+
+    const todayIST = toISTDateString(new Date())
+    await buildTodaySummaryForHousehold(hId, todayIST)
+  },
+)
