@@ -29,9 +29,24 @@ service-account.json
 # Firebase emulator export (regenerated on emulators:export — don't commit)
 emulator-data/
 
-# Capacitor
-android/
+# Firebase CLI deploy cache (regenerated on every deploy)
+.firebase/
+
+# Capacitor — native projects ARE committed; only build artifacts and secrets ignored
+# iOS platform not yet scaffolded — revisit when ios/ is added via `npx cap add ios`
 ios/
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/captures/
+android/local.properties
+android/app/release/
+android/keystore.properties
+
+# Signing keystores — NEVER commit
+*.keystore
+*.jks
 
 # Editor directories and files
 .vscode/*
