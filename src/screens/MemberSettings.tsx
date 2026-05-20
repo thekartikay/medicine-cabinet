@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react'
-import { signOut } from 'firebase/auth'
-import { Bell, MessageCircle, Globe, LogOut, Check } from 'lucide-react'
+import { signOut, type User as FirebaseUser } from 'firebase/auth'
+import { Bell, MessageCircle, Globe, LogOut, Check, User as UserIcon } from 'lucide-react'
 import i18n from '../lib/i18n'
 import { auth } from '../lib/firebase'
 import { getUserDoc, updateUserPreferences } from '../services/firestoreService'
 import type { AppUser } from '../types'
 import { DeleteAccountSection } from './DeleteAccountSection'
+import { Profile } from './Profile'
 
 interface Props {
+  user: FirebaseUser
+  hId: string
+  role: 'admin' | 'member' | 'caregiver'
   currentUid: string
   currentUserName: string
   onAccountDeleted: () => void
@@ -24,18 +28,20 @@ const LANGUAGES = [
 // Lightweight settings page for members. Mirrors SettingsTab's notification
 // + language behaviours but omits household management, the family roster,
 // and the invite flow — those belong to the admin only.
-export function MemberSettings({ currentUid, currentUserName, onAccountDeleted }: Props) {
+export function MemberSettings({ user, hId, role, currentUid, currentUserName, onAccountDeleted }: Props) {
+  const [view, setView] = useState<'list' | 'profile'>('list')
   const [appUser, setAppUser] = useState<AppUser | null>(null)
   const [loadError, setLoadError] = useState('')
   const [showLangSheet, setShowLangSheet] = useState(false)
 
   useEffect(() => {
+    if (view !== 'list') return
     let cancelled = false
     getUserDoc(currentUid)
       .then(u => { if (!cancelled) setAppUser(u) })
       .catch(() => { if (!cancelled) setLoadError('Could not load settings.') })
     return () => { cancelled = true }
-  }, [currentUid])
+  }, [currentUid, view])
 
   const pushOn = appUser?.pushNotificationsEnabled ?? true
   const waOn   = appUser?.whatsappRemindersEnabled ?? true
@@ -65,10 +71,37 @@ export function MemberSettings({ currentUid, currentUserName, onAccountDeleted }
 
   const langLabel = LANGUAGES.find(l => l.code === lang)?.label ?? 'English'
 
+  if (view === 'profile') {
+    return (
+      <Profile
+        user={user}
+        hId={hId}
+        role={role}
+        onBack={() => setView('list')}
+      />
+    )
+  }
+
   return (
     <div className="cb-view">
       <h2 className="cb-page-title">Hi {currentUserName}</h2>
       {loadError && <p className="cb-form-error" role="alert">{loadError}</p>}
+
+      {/* ─── Profile (AK-161) ─────────────────────────────────────── */}
+      <section className="db-card st-card">
+        <button
+          type="button"
+          className="st-row-button"
+          onClick={() => setView('profile')}
+        >
+          <span className="st-toggle-icon st-toggle-icon--blueberry"><UserIcon size={16} /></span>
+          <div className="st-toggle-text">
+            <span className="st-toggle-label">Profile</span>
+            <span className="st-toggle-sub">Name, language, account</span>
+          </div>
+          <span className="st-row-chev" aria-hidden="true">›</span>
+        </button>
+      </section>
 
       {/* Notifications */}
       <section className="db-card st-card">

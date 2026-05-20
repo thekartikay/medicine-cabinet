@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { signOut } from 'firebase/auth'
+import { signOut, type User as FirebaseUser } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
-import { Bell, MessageCircle, Globe, UserPlus, LogOut, Check } from 'lucide-react'
+import { Bell, MessageCircle, Globe, UserPlus, LogOut, Check, User as UserIcon } from 'lucide-react'
 import i18n from '../lib/i18n'
 import { auth, functions } from '../lib/firebase'
 import {
@@ -13,8 +13,11 @@ import type { AppUser, HouseholdMember } from '../types'
 import { InviteMember, computeJoinCode } from './InviteMember'
 import { DeleteAccountSection } from './DeleteAccountSection'
 import { AdminMemberView } from './AdminMemberView'
+import { Profile } from './Profile'
 
 interface Props {
+  user: FirebaseUser
+  role: 'admin' | 'member' | 'caregiver'
   hId: string
   householdName: string
   currentUid: string
@@ -37,8 +40,8 @@ const LANGUAGES = [
   { code: 'te', label: 'తెలుగు (Telugu)'   },
 ] as const
 
-export function SettingsTab({ hId, householdName, currentUid, currentUserName, isAdmin, onAccountDeleted }: Props) {
-  const [view, setView]                 = useState<'list' | 'invite' | 'member'>('list')
+export function SettingsTab({ user, role, hId, householdName, currentUid, currentUserName, isAdmin, onAccountDeleted }: Props) {
+  const [view, setView]                 = useState<'list' | 'invite' | 'member' | 'profile'>('list')
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
   const [members, setMembers]           = useState<HouseholdMember[] | null>(null)
   const [appUser, setAppUser]           = useState<AppUser | null>(null)
@@ -113,6 +116,17 @@ export function SettingsTab({ hId, householdName, currentUid, currentUserName, i
     }
   }
 
+  if (view === 'profile') {
+    return (
+      <Profile
+        user={user}
+        hId={hId}
+        role={role}
+        onBack={() => setView('list')}
+      />
+    )
+  }
+
   if (view === 'invite') {
     return (
       <InviteMember
@@ -148,6 +162,22 @@ export function SettingsTab({ hId, householdName, currentUid, currentUserName, i
       <h2 className="cb-page-title">Settings</h2>
 
       {loadError && <p className="cb-form-error" role="alert">{loadError}</p>}
+
+      {/* ─── Profile (AK-161) ─────────────────────────────────────── */}
+      <section className="db-card st-card">
+        <button
+          type="button"
+          className="st-row-button"
+          onClick={() => setView('profile')}
+        >
+          <span className="st-toggle-icon st-toggle-icon--blueberry"><UserIcon size={16} /></span>
+          <div className="st-toggle-text">
+            <span className="st-toggle-label">Profile</span>
+            <span className="st-toggle-sub">Name, language, account</span>
+          </div>
+          <span className="st-row-chev" aria-hidden="true">›</span>
+        </button>
+      </section>
 
       {/* ─── Section 1 — Active member (admin only) ─────────────── */}
       {isAdmin && (

@@ -18,7 +18,7 @@ import {
   arrayUnion,
   Timestamp,
 } from 'firebase/firestore'
-import type { User as FirebaseUser } from 'firebase/auth'
+import { updateProfile, type User as FirebaseUser } from 'firebase/auth'
 import { db } from '../lib/firebase'
 import {
   userPath,
@@ -100,6 +100,29 @@ export async function updateUserProfile(
     { ...updates, updatedAt: serverTimestamp() },
     { merge: true },
   )
+}
+
+// AK-161 — Single entry point for renaming the current user. The displayName
+// lives in three places (Firebase Auth, users/{uid}, and the denormalised copy
+// on households/{hId}/members/{uid}); the Profile screen has to update all
+// three or the roster and "Updated by …" displays drift. hId is nullable for
+// the rare case of a user without a household (e.g. mid-onboarding). Fails
+// fast: a partial failure is surfaced to the caller so the user can retry,
+// rather than silently leaving the three copies inconsistent.
+export async function updateDisplayNameEverywhere(
+  uid: string,
+  hId: string | null,
+  user: FirebaseUser,
+  displayName: string,
+): Promise<void> {
+  const trimmed = displayName.trim()
+  if (!trimmed) throw new Error('Display name cannot be empty')
+
+  await Promise.all([
+    updateProfile(user, { displayName: trimmed }),
+    updateUserProfile(uid, { displayName: trimmed }),
+    hId ? syncMemberDisplayName(hId, uid, trimmed) : Promise.resolve(),
+  ])
 }
 
 // Note: household creation now lives in the createHousehold Cloud Function

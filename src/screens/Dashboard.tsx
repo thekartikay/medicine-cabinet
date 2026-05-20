@@ -1283,12 +1283,17 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
           <div style={{ display: activeTab === 'settings' ? 'contents' : 'none' }}>
             {role === 'member' ? (
               <MemberSettings
+                user={user}
+                hId={household.hId}
+                role={role}
                 currentUid={user.uid}
                 currentUserName={user.displayName?.trim() || 'there'}
                 onAccountDeleted={onAccountDeleted}
               />
             ) : (
               <SettingsTab
+                user={user}
+                role={role}
                 hId={household.hId}
                 householdName={household.name}
                 currentUid={user.uid}
