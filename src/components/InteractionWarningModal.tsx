@@ -1,8 +1,16 @@
-// AK-39 sub-task 2 — Soft-block modal shown at treatment-create time when
-// the newly selected medicine has a known interaction with one already in the
-// member's active treatments. Per the rescope, this informs but does not
-// hard-stop: "Add anyway" lets the user proceed, "Go back" dismisses the
-// warning and keeps them on the medicine step.
+import { useState } from 'react'
+
+// AK-39 sub-task 3 — Hard-block drug-interaction modal shown at the
+// step 2 → step 3 boundary of the treatment-create wizard. Replaces the
+// sub-task 2 soft-warn that previously offered "Add anyway".
+//
+// The default view exposes only two paths: a primary "Go back" (closes
+// the modal, keeps the user on step 2 to pick a different medicine) and
+// a secondary "Override (admin logged)" that reveals an inline
+// justification field. Confirming the override invokes onOverride with
+// the trimmed justification string; the parent is responsible for
+// buffering that text and writing the audit row via
+// recordInteractionAcknowledgement once the treatment doc exists.
 
 interface InteractionWarningModalProps {
   warning: {
@@ -10,40 +18,93 @@ interface InteractionWarningModalProps {
     withMedicineNames: string[]
     riskLevel: 'moderate' | 'high'
   }
-  onProceed: () => void
   onGoBack: () => void
+  onOverride: (justification: string) => void
 }
+
+const MIN_JUSTIFICATION_LENGTH = 10
 
 export function InteractionWarningModal({
   warning,
-  onProceed,
   onGoBack,
+  onOverride,
 }: InteractionWarningModalProps) {
+  const [showJustification, setShowJustification] = useState(false)
+  const [justification, setJustification] = useState('')
+  const trimmed = justification.trim()
+  const canConfirm = trimmed.length >= MIN_JUSTIFICATION_LENGTH
+
   return (
     <div className="iw-overlay" role="dialog" aria-modal="true" aria-labelledby="iw-title">
       <div className="iw-card">
         <div className="iw-icon-circle" aria-hidden="true">⚠︎</div>
-        <h2 id="iw-title" className="iw-title">Potential interaction detected</h2>
+        <h2 id="iw-title" className="iw-title">Drug Interaction Warning</h2>
         <p className="iw-description">{warning.description}</p>
         {warning.withMedicineNames.length > 0 && (
           <p className="iw-with">
             Interacts with: {warning.withMedicineNames.join(', ')}
           </p>
         )}
-        <button
-          type="button"
-          className="iw-button iw-button--primary"
-          onClick={onProceed}
-        >
-          Add anyway
-        </button>
-        <button
-          type="button"
-          className="iw-button iw-button--secondary"
-          onClick={onGoBack}
-        >
-          Go back
-        </button>
+
+        {!showJustification ? (
+          <>
+            <button
+              type="button"
+              className="iw-button iw-button--primary"
+              onClick={onGoBack}
+              autoFocus
+            >
+              Go back
+            </button>
+            <button
+              type="button"
+              className="iw-button iw-button--secondary"
+              onClick={() => setShowJustification(true)}
+            >
+              Override (admin logged)
+            </button>
+          </>
+        ) : (
+          <>
+            <label
+              className="iw-just-label"
+              htmlFor="iw-justification"
+            >
+              Why is this override safe? (required — logged for audit)
+            </label>
+            <textarea
+              id="iw-justification"
+              className="iw-just-input"
+              value={justification}
+              onChange={(e) => setJustification(e.target.value)}
+              placeholder="e.g. Doctor confirmed this combination is safe"
+              rows={3}
+              autoFocus
+              aria-describedby="iw-just-hint"
+            />
+            <p id="iw-just-hint" className="iw-just-hint">
+              {trimmed.length}/{MIN_JUSTIFICATION_LENGTH} minimum characters
+            </p>
+            <button
+              type="button"
+              className="iw-button iw-button--primary"
+              onClick={() => onOverride(trimmed)}
+              disabled={!canConfirm}
+            >
+              Confirm override
+            </button>
+            <button
+              type="button"
+              className="iw-button iw-button--secondary"
+              onClick={() => {
+                setShowJustification(false)
+                setJustification('')
+              }}
+            >
+              Cancel
+            </button>
+          </>
+        )}
       </div>
     </div>
   )

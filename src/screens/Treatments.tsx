@@ -22,6 +22,7 @@ import {
   getActiveTreatmentMedicines,
   getActiveTreatmentsWithRegimensForMember,
   recordConflictAcknowledgement,
+  recordInteractionAcknowledgement,
   logRetroactiveDoses,
   addCabinetItem,
   searchMasterDb,
@@ -283,6 +284,60 @@ function generatePastSlots(
   return { slots: out, wasCapped }
 }
 
+// AK-39 sub-task 3 — Tokenise a CabinetItem.activeIngredients string into
+// a normalised Set so deterministic same-ingredient lookups are case- and
+// whitespace-insensitive. Empty / null inputs produce an empty Set so
+// callers can treat absence as "no overlap" without extra null guards.
+function normalizeIngredientTokens(s: string | null | undefined): Set<string> {
+  if (!s) return new Set()
+  return new Set(
+    s
+      .trim()
+      .toLowerCase()
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean),
+  )
+}
+
+// AK-39 sub-task 3 — Deterministic pre-check that fires before the
+// Gemini-backed interaction check at the step 2 → step 3 boundary.
+// Catches the "same active ingredient, different brand / medicineId" case
+// that the AK-123 medicineId-only duplicate detection silently misses.
+// Returns the first match found (cabinet-item id + display name + the
+// shared ingredient token) so the modal copy can name what's overlapping.
+function detectIngredientCollision(
+  selectedItem: CabinetItem,
+  otherMedicines: Array<{ cabinetItemId: string; displayName: string; medicineId: string }>,
+  cabinetItems: CabinetItem[],
+  currentMedicineId: string,
+): {
+  conflictingCabinetItemId: string
+  conflictingMedicineName: string
+  overlapToken: string
+} | null {
+  const newTokens = normalizeIngredientTokens(selectedItem.activeIngredients)
+  if (newTokens.size === 0) return null
+  for (const other of otherMedicines) {
+    // AK-123 already hard-blocks same-medicineId duplicates with a different
+    // modal; skip here so the user doesn't get hit by two modals in a row.
+    if (other.medicineId === currentMedicineId) continue
+    const otherItem = cabinetItems.find((i) => i.iId === other.cabinetItemId)
+    if (!otherItem) continue
+    const otherTokens = normalizeIngredientTokens(otherItem.activeIngredients)
+    for (const t of newTokens) {
+      if (otherTokens.has(t)) {
+        return {
+          conflictingCabinetItemId: other.cabinetItemId,
+          conflictingMedicineName: other.displayName,
+          overlapToken: t,
+        }
+      }
+    }
+  }
+  return null
+}
+
 // AK-123 — Classify how a new treatment's date range relates to an existing
 // regimen's range. Operates on YYYY-MM-DD strings (lexicographic comparison)
 // + null = "open-ended" sentinel. Returns null for disjoint ranges (no
@@ -396,12 +451,28 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   const [stepError, setStepError] = useState('')
   const [saveLoading, setSaveLoading] = useState(false)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
-  // AK-39 sub-task 2 — Interaction check gate at step2 → step3 transition.
+  // AK-39 sub-task 2 + sub-task 3 — Interaction check gate at step2 → step3
+  // transition. Sub-task 3 upgraded the soft "Add anyway" exit to a
+  // hard-block with an admin-override-with-justification path. The extra
+  // fields below feed the audit row recordInteractionAcknowledgement writes
+  // when the user confirms the override.
   const [checkingInteraction, setCheckingInteraction] = useState(false)
   const [pendingInteractionWarning, setPendingInteractionWarning] = useState<{
     description: string
     withMedicineNames: string[]
     riskLevel: 'moderate' | 'high'
+    conflictingCabinetItemId: string
+    conflictingMedicineName: string
+    source: 'deterministic' | 'gemini'
+  } | null>(null)
+  // Buffered override intent — populated when the admin confirms the
+  // hard-block override in the modal at step 2, drained in handleSave once
+  // the treatment doc exists so the ack row addresses a real tId.
+  const [interactionOverride, setInteractionOverride] = useState<{
+    conflictingCabinetItemId: string
+    conflictingMedicineName: string
+    interactionSummary: string
+    justification: string
   } | null>(null)
   // AK-123 — Conflict check gate at step3 → step4 transition. Hard blocks
   // ('duplicate' / 'subset') stay on step 3; soft warns ('overlap') set
@@ -1027,15 +1098,52 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
           setView(next[view])
           return
         }
+
+        // AK-39 sub-task 3 — Deterministic same-ingredient pre-check runs
+        // before the Gemini call. Free Firestore read (cabinetItems is
+        // already subscribed), zero model latency, catches the obvious
+        // "same drug, different brand" double-dosing case that AK-123's
+        // medicineId-only check would miss.
+        const collision = detectIngredientCollision(
+          selectedItem,
+          otherMedicines,
+          cabinetItems,
+          formMedicineId,
+        )
+        if (collision) {
+          const memberLabel = formMemberName ?? 'this member'
+          setPendingInteractionWarning({
+            description:
+              `This medicine contains ${collision.overlapToken}, which ${memberLabel} is already taking via ${collision.conflictingMedicineName}. Adding it would double their dose.`,
+            withMedicineNames: [collision.conflictingMedicineName],
+            riskLevel: 'high',
+            conflictingCabinetItemId: collision.conflictingCabinetItemId,
+            conflictingMedicineName: collision.conflictingMedicineName,
+            source: 'deterministic',
+          })
+          return
+        }
+
         const result = await checkCabinetInteractions(
           selectedItem,
           otherMedicines.map(m => m.cabinetItemId),
         )
         if (result?.hasInteraction) {
+          // Resolve the first cabinet-item id that matches one of Gemini's
+          // returned medicine names so the audit row can reference a real
+          // doc. Falls back to the first otherMedicine if no name matches
+          // (rare — Gemini occasionally paraphrases the display name).
+          const firstWithName = result.withMedicineNames[0] ?? ''
+          const matched = otherMedicines.find(
+            (m) => m.displayName.trim().toLowerCase() === firstWithName.trim().toLowerCase(),
+          ) ?? otherMedicines[0]
           setPendingInteractionWarning({
             description: result.description,
             withMedicineNames: result.withMedicineNames,
             riskLevel: result.riskLevel,
+            conflictingCabinetItemId: matched?.cabinetItemId ?? '',
+            conflictingMedicineName: result.withMedicineNames.join(', '),
+            source: 'gemini',
           })
           // Stay on step2; modal drives the next action.
           return
@@ -1106,6 +1214,10 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setInlineAddError('')
     setInlineAddSuccess('')
     setTreatmentInteractionWarning(null)
+    // AK-39 sub-task 3 — drop any buffered override so it can't bleed into
+    // the next treatment-creation flow.
+    setPendingInteractionWarning(null)
+    setInteractionOverride(null)
     setView('list')
   }
 
@@ -1158,6 +1270,24 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
           // Audit write failed; treatment is already created. Surface via
           // logs only — don't error the user. The conflict-tracking is a
           // nice-to-have, not a correctness requirement.
+        }
+      }
+      // AK-39 sub-task 3 — Same shape as the AK-123 ack write above. The
+      // treatment + regimen writes already succeeded; the interaction-ack
+      // is best-effort and must NOT roll back the creation. Failure logs
+      // silently so the admin still gets the treatment they meant to save.
+      if (interactionOverride) {
+        try {
+          await recordInteractionAcknowledgement(hId, tId, {
+            conflictingCabinetItemId: interactionOverride.conflictingCabinetItemId,
+            conflictingMedicineName: interactionOverride.conflictingMedicineName,
+            interactionSummary: interactionOverride.interactionSummary,
+            justification: interactionOverride.justification,
+            acknowledgedByUid: auth.currentUser?.uid ?? currentUid,
+            acknowledgedByName: auth.currentUser?.displayName ?? '',
+          })
+        } catch {
+          // Same swallow as the AK-123 path; treatment is already saved.
         }
       }
       // AK-121 — If the user picked "log past doses" on the PastDateModal,
@@ -1301,6 +1431,10 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     )
   }
   function selectCabinetItem(iId: string) {
+    // AK-39 sub-task 3 — any buffered override targets the previously-selected
+    // medicine; dropping it on a fresh pick avoids carrying a stale audit
+    // payload into a treatment for a different drug.
+    setInteractionOverride(null)
     if (!iId) {
       setFormCabinetItemId('')
       setFormMedicineId('')
@@ -2874,11 +3008,21 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
       {pendingInteractionWarning && (
         <InteractionWarningModal
           warning={pendingInteractionWarning}
-          onProceed={() => {
+          onGoBack={() => setPendingInteractionWarning(null)}
+          onOverride={(justification) => {
+            // AK-39 sub-task 3 — Buffer the override intent; the audit row
+            // is written from handleSave once the treatment doc exists.
+            // Description text doubles as the audited interactionSummary.
+            const w = pendingInteractionWarning
+            setInteractionOverride({
+              conflictingCabinetItemId: w.conflictingCabinetItemId,
+              conflictingMedicineName: w.conflictingMedicineName,
+              interactionSummary: w.description,
+              justification,
+            })
             setPendingInteractionWarning(null)
             setView('step3')
           }}
-          onGoBack={() => setPendingInteractionWarning(null)}
         />
       )}
 

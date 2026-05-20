@@ -1259,6 +1259,37 @@ export async function recordConflictAcknowledgement(
   )
 }
 
+// AK-39 sub-task 3 — Append-only audit entry written when an admin overrides
+// a hard-block drug-interaction warning at step 2 → step 3 of the wizard.
+// Lives at households/{hId}/treatments/{tId}/interactionAcknowledgements/{ackId}
+// with a Firestore-generated id. Same immutability contract as the AK-123
+// conflictAcknowledgements row — rules enforce admin-only create, self-uid
+// match, and forbid update/delete.
+//
+// Called from handleSave after the treatment + regimen writes succeed, so
+// the ack row addresses a real treatment doc. Failure is swallowed: an
+// audit-row write that fails must not roll back the treatment.
+export async function recordInteractionAcknowledgement(
+  hId: string,
+  tId: string,
+  payload: {
+    conflictingCabinetItemId: string
+    conflictingMedicineName: string
+    interactionSummary: string
+    justification: string
+    acknowledgedByUid: string
+    acknowledgedByName: string
+  },
+): Promise<void> {
+  await addDoc(
+    collection(db, `households/${hId}/treatments/${tId}/interactionAcknowledgements`),
+    {
+      acknowledgedAt: serverTimestamp(),
+      ...payload,
+    },
+  )
+}
+
 export async function loadAllActiveRegimens(
   hId: string,
 ): Promise<{ treatments: Treatment[]; regimensByTreatment: Record<string, Regimen[]> }> {

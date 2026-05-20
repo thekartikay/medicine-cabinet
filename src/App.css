@@ -244,6 +244,43 @@
 .iw-button--secondary:hover { background-color: rgba(16, 100, 112, 0.06); }
 .iw-button--secondary:active { background-color: rgba(16, 100, 112, 0.12); }
 
+/* AK-39 sub-task 3 — Justification field surfaced inside the modal when the
+   admin chooses Override on the hard-block warning. */
+.iw-just-label {
+  display: block;
+  width: 100%;
+  margin: 0.5rem 0 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #374151;
+}
+.iw-just-input {
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  border-radius: 12px;
+  border: 1.5px solid #D1D5DB;
+  font-family: var(--sans);
+  font-size: 0.9375rem;
+  color: #111827;
+  resize: vertical;
+  min-height: 72px;
+  background: #ffffff;
+  box-sizing: border-box;
+}
+.iw-just-input:focus {
+  outline: none;
+  border-color: #106470;
+}
+.iw-just-hint {
+  margin: 0.25rem 0 0.5rem;
+  font-size: 0.75rem;
+  color: #6B7280;
+}
+.iw-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── TreatmentInteractionWarningModal (tiw- prefix, AK-124) ───── */
 /* Cabinet-add → active-treatment-interaction warning. Same shape as
    .iw-*; carries an extra advisory paragraph below the "Interacts with"

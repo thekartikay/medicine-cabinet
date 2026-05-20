@@ -296,6 +296,23 @@ service cloud.firestore {
           allow update: if false;
           allow delete: if false;
         }
+
+        // ── /households/{hId}/treatments/{tId}/interactionAcknowledgements/{ackId}
+        // AK-39 sub-task 3 — Append-only audit trail of admin overrides on
+        // hard-block drug-interaction warnings at treatment-create time.
+        // Same immutability contract as conflictAcknowledgements above:
+        // admin-only create, writer stamps own uid, never edited or deleted.
+        // Justification text is required by the client (≥10 chars) but the
+        // length floor isn't enforced at the rules layer to keep the rules
+        // surface narrow — the audit value comes from the row existing at
+        // all, not from a specific minimum word count.
+        match /interactionAcknowledgements/{ackId} {
+          allow read:   if isParticipant(hId);
+          allow create: if isAdmin(hId)
+                         && request.resource.data.acknowledgedByUid == request.auth.uid;
+          allow update: if false;
+          allow delete: if false;
+        }
       }
 
       // ── /households/{hId}/todaySummary/{date} ──────────────────────────
