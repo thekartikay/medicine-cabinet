@@ -135,6 +135,15 @@ function generateLateOptionsForSlot(scheduledTime: string): string[] {
   return options
 }
 
+// AK-132 — Pool of affirmation lines shown briefly under a just-confirmed
+// dose card. Picked at random per confirm so the same string doesn't repeat
+// on consecutive taps. Kept short on purpose — this is reinforcement, not
+// copy.
+const CONFIRM_MESSAGES = ['Nice work.', 'Done.', 'Logged.'] as const
+function pickConfirmMessage(): string {
+  return CONFIRM_MESSAGES[Math.floor(Math.random() * CONFIRM_MESSAGES.length)]
+}
+
 function formatTimeFriendly(hhmm: string): string {
   const [h, m] = hhmm.split(':').map(Number)
   const period = h >= 12 ? 'pm' : 'am'
@@ -199,6 +208,11 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   const [logsBySlot, setLogsBySlot] = useState<Record<string, LogState>>({})
   const [pendingSlot, setPendingSlot] = useState<string | null>(null)
   const [confirmedSlot, setConfirmedSlot] = useState<string | null>(null)
+  // AK-132 — Ephemeral affirmation displayed under a just-confirmed card.
+  // Picked at confirm time from CONFIRM_MESSAGES so it stays stable across
+  // re-renders during the 1.6s window. Cleared on the same timer that
+  // clears confirmedSlot.
+  const [confirmedMessage, setConfirmedMessage] = useState<string | null>(null)
   const [skipModeFor, setSkipModeFor] = useState<string | null>(null)
   const [skipReasonText, setSkipReasonText] = useState('')
   const [lateModeFor, setLateModeFor] = useState<string | null>(null)
@@ -689,7 +703,17 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
 
       if (status === 'taken' || status === 'late') {
         setConfirmedSlot(slot.slotId)
-        setTimeout(() => setConfirmedSlot(prev => prev === slot.slotId ? null : prev), 1600)
+        setConfirmedMessage(pickConfirmMessage())
+        setTimeout(() => {
+          // Only clear if no newer confirm has taken over — keeps back-to-back
+          // taps from clearing each other's affirmation early. The message
+          // clears in lockstep with the slot id (next confirm resets both).
+          setConfirmedSlot(prev => {
+            if (prev !== slot.slotId) return prev
+            setConfirmedMessage(null)
+            return null
+          })
+        }, 1600)
       }
     } catch {
       // Revert
@@ -999,6 +1023,15 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
 
                                                   {detail && (
                                                     <p className={`tr-log-reason tr-log-reason--${log!.status}`}>{detail}</p>
+                                                  )}
+
+                                                  {/* AK-132 — Ephemeral affirmation under the just-confirmed
+                                                      card. Picked at confirm time so re-renders during the
+                                                      1.6s window don't rotate the string. */}
+                                                  {isConfirmed && confirmedMessage && (
+                                                    <p className="tr-confirm-message" role="status">
+                                                      {confirmedMessage}
+                                                    </p>
                                                   )}
 
                                                   {log?.adminOverride && (() => {

@@ -133,6 +133,13 @@ function foodInline(timing: FoodTiming): string {
   return 'With food'
 }
 
+// AK-132 — Random affirmation picked at confirm time. Kept identical to the
+// Dashboard pool so the experience is consistent across the two views.
+const CONFIRM_MESSAGES = ['Nice work.', 'Done.', 'Logged.'] as const
+function pickConfirmMessage(): string {
+  return CONFIRM_MESSAGES[Math.floor(Math.random() * CONFIRM_MESSAGES.length)]
+}
+
 export function MemberDoseCard({ user, household }: Props) {
   const { t } = useTranslation()
 
@@ -143,6 +150,10 @@ export function MemberDoseCard({ user, household }: Props) {
   // UI state
   const [pendingSlot, setPendingSlot] = useState<string | null>(null)
   const [confirmedSlot, setConfirmedSlot] = useState<string | null>(null)
+  // AK-132 — Affirmation line shown briefly under the dose card after a
+  // taken/late mark. Picked once at confirm time and held stable through
+  // the 1.6s window via the same setTimeout that clears confirmedSlot.
+  const [confirmedMessage, setConfirmedMessage] = useState<string | null>(null)
   const [logError, setLogError] = useState('')
 
   // Modals
@@ -387,7 +398,14 @@ export function MemberDoseCard({ user, household }: Props) {
 
       if (status === 'taken' || status === 'late') {
         setConfirmedSlot(slot.slotId)
-        setTimeout(() => setConfirmedSlot(prev => prev === slot.slotId ? null : prev), 1600)
+        setConfirmedMessage(pickConfirmMessage())
+        setTimeout(() => {
+          setConfirmedSlot(prev => {
+            if (prev !== slot.slotId) return prev
+            setConfirmedMessage(null)
+            return null
+          })
+        }, 1600)
       }
     } catch {
       setLogsBySlot(prev => {
@@ -590,6 +608,15 @@ export function MemberDoseCard({ user, household }: Props) {
             <div className="md-done-body">No doses scheduled for today.</div>
           </div>
         ) : null}
+
+        {/* AK-132 — Affirmation flash. Sits below the focus card / done panel
+            so the celebration message rides whichever surface is currently
+            showing. Fades with the same 1.6s timer that clears the pulse. */}
+        {confirmedSlot && confirmedMessage && (
+          <p className="md-confirm-message" role="status">
+            {confirmedMessage}
+          </p>
+        )}
 
         {/* Persistent missed-dose card (separate from the focus card) */}
         {missedToShow && (() => {

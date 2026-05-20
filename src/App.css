@@ -2334,13 +2334,42 @@
 
 /* Brief green pulse when a dose is just logged as taken/late */
 @keyframes tr-confirm-pulse {
-  0%   { box-shadow: 0 0 0 0   rgba(90, 182, 72, 0.55), 0 1px 8px rgba(16, 100, 112, 0.08); }
-  60%  { box-shadow: 0 0 0 12px rgba(90, 182, 72, 0),    0 1px 8px rgba(16, 100, 112, 0.08); }
-  100% { box-shadow: 0 0 0 0   rgba(90, 182, 72, 0),    0 1px 8px rgba(16, 100, 112, 0.08); }
+  0%   { box-shadow: 0 0 0 0   rgba(90, 182, 72, 0.65), 0 1px 8px rgba(16, 100, 112, 0.08); transform: scale(1); }
+  15%  { transform: scale(1.04); }
+  40%  { transform: scale(1); }
+  60%  { box-shadow: 0 0 0 18px rgba(90, 182, 72, 0),    0 1px 8px rgba(16, 100, 112, 0.08); }
+  100% { box-shadow: 0 0 0 0   rgba(90, 182, 72, 0),    0 1px 8px rgba(16, 100, 112, 0.08); transform: scale(1); }
 }
 
 .tr-dose-card--just-confirmed {
   animation: tr-confirm-pulse 1.6s ease-out;
+}
+
+/* AK-132 — Badge pop. Fires on the taken badge the moment it mounts inside
+   a just-confirmed card. The badge appears as part of the same optimistic
+   render as the --just-confirmed class, so a CSS-only descendant selector
+   is enough — no JS toggle. */
+@keyframes dose-badge-pop {
+  0%   { transform: scale(0.6) rotate(-8deg); opacity: 0; }
+  60%  { transform: scale(1.15) rotate(2deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+.tr-dose-card--just-confirmed .tr-log-badge--taken,
+.tr-dose-card--just-confirmed .tr-log-badge--late {
+  animation: dose-badge-pop 400ms ease-out;
+}
+
+/* AK-132 — Ephemeral affirmation line. Sprout-green, small, fades with the
+   pulse. Opacity transition only; no separate keyframe. */
+.tr-confirm-message {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sprout);
+  letter-spacing: 0.01em;
+  opacity: 0.95;
+  transition: opacity 0.3s ease-out;
 }
 
 /* Skip-reason validation meta line */
@@ -3035,13 +3064,36 @@
 /* ── Confirm pulse on the dose card after a successful log ──── */
 
 @keyframes md-confirm-pulse {
-  0%   { box-shadow: 0 0 0 0   rgba(90, 182, 72, 0.55), 0 1px 8px rgba(16, 100, 112, 0.08); }
-  60%  { box-shadow: 0 0 0 14px rgba(90, 182, 72, 0),    0 1px 8px rgba(16, 100, 112, 0.08); }
-  100% { box-shadow: 0 0 0 0   rgba(90, 182, 72, 0),    0 1px 8px rgba(16, 100, 112, 0.08); }
+  0%   { box-shadow: 0 0 0 0   rgba(90, 182, 72, 0.65), 0 1px 8px rgba(16, 100, 112, 0.08); transform: scale(1); }
+  15%  { transform: scale(1.04); }
+  40%  { transform: scale(1); }
+  60%  { box-shadow: 0 0 0 18px rgba(90, 182, 72, 0),    0 1px 8px rgba(16, 100, 112, 0.08); }
+  100% { box-shadow: 0 0 0 0   rgba(90, 182, 72, 0),    0 1px 8px rgba(16, 100, 112, 0.08); transform: scale(1); }
 }
 
 .md-dose-card--just-confirmed {
   animation: md-confirm-pulse 1.6s ease-out;
+}
+
+/* AK-132 — Member-side equivalents of the badge-pop + affirmation. The
+   Member's next-pending card cycles to the next dose immediately after a
+   tap, so there's no per-card taken badge to animate (the way Dashboard's
+   tr-log-badge--taken inside each row works). The natural celebration
+   surface on the Member screen is the md-done-tick at end-of-day — it pops
+   the same way whenever the all-done panel mounts. */
+.md-done-tick {
+  animation: dose-badge-pop 400ms ease-out;
+}
+
+.md-confirm-message {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sprout);
+  letter-spacing: 0.01em;
+  opacity: 0.95;
+  text-align: center;
+  transition: opacity 0.3s ease-out;
 }
 
 
