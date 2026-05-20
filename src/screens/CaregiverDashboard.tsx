@@ -213,7 +213,10 @@ export function CaregiverDashboard() {
   const member = summary?.members?.[session.visibleMemberId]
   const slots: TodaySummarySlot[] = member
     ? Object.values(member.slots).sort((a, b) =>
-        a.scheduledTime.localeCompare(b.scheduledTime),
+        // AK-131 — flexible-daily slots have a null scheduledTime; fall
+        // back to '09:00' (the anchor) so they sort alongside the 9 AM
+        // block instead of crashing localeCompare.
+        (a.scheduledTime ?? '09:00').localeCompare(b.scheduledTime ?? '09:00'),
       )
     : []
   const dateStr = summary?.date ?? todayISTString()
@@ -244,14 +247,17 @@ export function CaregiverDashboard() {
             const loggedText = showLoggedTime
               ? `${slot.status === 'skipped' ? 'Skipped' : 'Taken'} at ${formatLoggedAt(slot.loggedAt)}`
               : null
+            const isFlexible = slot.scheduleType === 'flexible-daily'
             return (
               <article
-                key={`${slot.regimenId}-${slot.scheduledTime}`}
+                key={`${slot.regimenId}-${slot.scheduledTime ?? 'flex'}`}
                 className="cc-slot-card"
               >
                 <div className="cc-slot-row">
                   <span className="cc-slot-time">
-                    {formatTime12(slot.scheduledTime)}
+                    {isFlexible || slot.scheduledTime === null
+                      ? 'Any time today'
+                      : formatTime12(slot.scheduledTime)}
                   </span>
                   <span className={`cc-slot-badge ${badge.cls}`}>
                     {badge.label}
