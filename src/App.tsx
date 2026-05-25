@@ -53,6 +53,9 @@ function App() {
   const [user, setUser] = useState<User | null>(null)
   const [household, setHousehold] = useState<HouseholdSummary | null>(null)
   const [role, setRole] = useState<Role>('admin')
+  // AK-172 — foreground dose reminder banner. firebase.ts rebroadcasts the
+  // FCM onMessage payload as a CustomEvent; this state drives the banner UI.
+  const [doseToast, setDoseToast] = useState<{ title: string; body: string } | null>(null)
 
   // Resumes the standard post-auth routing: householdless users go to
   // ChoosePath; everyone else gets a role claim + dashboard. Pulled out so
@@ -184,6 +187,29 @@ function App() {
     })
   }, [])
 
+  // AK-172 — listen for foreground dose reminders re-broadcast by firebase.ts
+  // and show a 5-second auto-dismissing banner. Each fresh event resets the
+  // dismiss timer so the latest reminder always gets its full visible window.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    function handler(e: Event) {
+      const detail = (e as CustomEvent).detail as
+        | { notification?: { title?: string; body?: string } }
+        | undefined
+      const title = detail?.notification?.title ?? ''
+      const body = detail?.notification?.body ?? ''
+      if (!title && !body) return
+      if (timer) clearTimeout(timer)
+      setDoseToast({ title, body })
+      timer = setTimeout(() => setDoseToast(null), 5000)
+    }
+    window.addEventListener('foreground-dose-reminder', handler)
+    return () => {
+      window.removeEventListener('foreground-dose-reminder', handler)
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
+
   async function onHouseholdCreated(hh: HouseholdSummary) {
     setHousehold(hh)
     if (user) {
@@ -299,6 +325,51 @@ function App() {
   return (
     <>
       <OfflineBanner />
+      {doseToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            top: 12,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 9999,
+            maxWidth: 'calc(100vw - 24px)',
+            padding: '12px 16px',
+            background: '#FFFFFF',
+            border: '1px solid #5DC1C8',
+            borderLeft: '4px solid #5DC1C8',
+            borderRadius: 8,
+            boxShadow: '0 6px 18px rgba(0, 0, 0, 0.12)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, color: '#0F172A', fontSize: 14 }}>{doseToast.title}</div>
+            {doseToast.body && (
+              <div style={{ color: '#475569', fontSize: 13, marginTop: 2 }}>{doseToast.body}</div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setDoseToast(null)}
+            aria-label="Dismiss"
+            style={{
+              flex: 'none',
+              border: 0,
+              background: 'transparent',
+              color: '#94A3B8',
+              cursor: 'pointer',
+              fontSize: 18,
+              lineHeight: 1,
+              padding: 4,
+            }}
+          >×</button>
+        </div>
+      )}
       {renderScreen()}
     </>
   )

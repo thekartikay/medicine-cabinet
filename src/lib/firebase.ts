@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 import { getStorage } from 'firebase/storage';
-import { getMessaging, getToken } from 'firebase/messaging';
+import { getMessaging, getToken, onMessage } from 'firebase/messaging';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -83,6 +83,19 @@ export const messaging = (() => {
     return null;
   }
 })();
+
+// AK-172 — foreground push handler. The SW only fires onBackgroundMessage when
+// the page is hidden; when the app is open in the foreground FCM delivers a
+// silent message to onMessage and expects the app to render its own UI. We
+// re-broadcast as a CustomEvent so App.tsx can surface a banner without this
+// module needing a React dependency.
+if (messaging) {
+  onMessage(messaging, (payload) => {
+    if (payload.data?.type === 'dose_reminder') {
+      window.dispatchEvent(new CustomEvent('foreground-dose-reminder', { detail: payload }));
+    }
+  });
+}
 
 // ─── FCM token registration (MC-006) ────────────────────────────────────────
 // Asks the browser/device for notification permission, requests a per-install
