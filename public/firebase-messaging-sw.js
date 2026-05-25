@@ -1,5 +1,5 @@
-importScripts('https://www.gstatic.com/firebasejs/10.0.0/firebase-app-compat.js')
-importScripts('https://www.gstatic.com/firebasejs/10.0.0/firebase-messaging-compat.js')
+importScripts('https://www.gstatic.com/firebasejs/12.12.1/firebase-app-compat.js')
+importScripts('https://www.gstatic.com/firebasejs/12.12.1/firebase-messaging-compat.js')
 
 firebase.initializeApp({
   apiKey: "AIzaSyAc8BcBMtN_Tciqvy0pUh-YIMGmNfzRa0w",
@@ -17,8 +17,11 @@ messaging.onBackgroundMessage((payload) => {
     payload.notification.title,
     {
       body: payload.notification.body,
-      icon: '/pill-icon.png',
-      data: payload.data
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: payload.data?.slotId,
+      requireInteraction: true,
+      data: payload.data,
     }
   )
 })

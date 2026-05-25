@@ -339,19 +339,39 @@ export const scheduleDoseNotifications = onSchedule(
               await messaging.send({
                 token: userData.fcmToken,
                 notification: {
-                  title: `Time to take ${medicineName}`,
-                  body: `Any time today works.`,
+                  title: `Don't forget — ${medicineName}`,
+                  body: `Take it any time before midnight.`,
                 },
                 data: {
                   slotId,
                   treatmentId: tId,
                   householdId: hId,
+                  patientId,
+                  medicineName,
                   type: 'dose_reminder',
                 },
-                android: { priority: 'high' },
+                android: {
+                  priority: 'high',
+                  ttl: 14 * 60 * 60 * 1000,
+                  notification: {
+                    channelId: 'dose_reminders',
+                    color: '#5DC1C8',
+                    tag: slotId,
+                    icon: 'ic_notification',
+                  },
+                },
                 apns: {
+                  headers: {
+                    'apns-collapse-id': slotId,
+                    'apns-priority': '10',
+                  },
                   payload: {
-                    aps: { sound: 'default', badge: 1 },
+                    aps: {
+                      sound: 'default',
+                      badge: 1,
+                      mutableContent: true,
+                      'interruption-level': 'time-sensitive',
+                    },
                   },
                 },
               })
@@ -402,12 +422,34 @@ export const scheduleDoseNotifications = onSchedule(
                   slotId,
                   treatmentId: tId,
                   householdId: hId,
+                  patientId,
+                  medicineName,
+                  scheduledTime: slot.time,
                   type: 'dose_reminder',
                 },
-                android: { priority: 'high' },
+                android: {
+                  priority: 'high',
+                  ttl: 90 * 60 * 1000,
+                  notification: {
+                    channelId: 'dose_reminders',
+                    color: '#5DC1C8',
+                    tag: slotId,
+                    icon: 'ic_notification',
+                    clickAction: 'OPEN_DOSE_CARD',
+                  },
+                },
                 apns: {
+                  headers: {
+                    'apns-collapse-id': slotId,
+                    'apns-priority': '10',
+                  },
                   payload: {
-                    aps: { sound: 'default', badge: 1 },
+                    aps: {
+                      sound: 'default',
+                      badge: 1,
+                      mutableContent: true,
+                      'interruption-level': 'time-sensitive',
+                    },
                   },
                 },
               })
@@ -560,9 +602,32 @@ export const sendDoseReminder = onCall(
         data: {
           type: 'caregiver_reminder',
           householdId: hId,
+          slotId,
         },
-        android: { priority: 'high' },
-        apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+        android: {
+          priority: 'high',
+          ttl: 90 * 60 * 1000,
+          notification: {
+            channelId: 'dose_reminders',
+            color: '#5DC1C8',
+            tag: slotId,
+            icon: 'ic_notification',
+          },
+        },
+        apns: {
+          headers: {
+            'apns-collapse-id': slotId,
+            'apns-priority': '10',
+          },
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+              mutableContent: true,
+              'interruption-level': 'time-sensitive',
+            },
+          },
+        },
       })
     } catch (err: unknown) {
       const code = (err as { code?: string })?.code
@@ -771,9 +836,29 @@ export const markMissedDoses = onSchedule(
                       slotId,
                       patientId,
                     },
-                    android: { priority: 'high' },
+                    android: {
+                      priority: 'high',
+                      ttl: 4 * 60 * 60 * 1000,
+                      notification: {
+                        channelId: 'dose_reminders',
+                        color: '#5DC1C8',
+                        tag: slotId,
+                        icon: 'ic_notification',
+                      },
+                    },
                     apns: {
-                      payload: { aps: { sound: 'default', badge: 1 } },
+                      headers: {
+                        'apns-collapse-id': slotId,
+                        'apns-priority': '10',
+                      },
+                      payload: {
+                        aps: {
+                          sound: 'default',
+                          badge: 1,
+                          mutableContent: true,
+                          'interruption-level': 'time-sensitive',
+                        },
+                      },
                     },
                   })
                 } catch (err: unknown) {
@@ -891,9 +976,29 @@ export const markMissedDoses = onSchedule(
                       slotId,
                       patientId,
                     },
-                    android: { priority: 'high' },
+                    android: {
+                      priority: 'high',
+                      ttl: 4 * 60 * 60 * 1000,
+                      notification: {
+                        channelId: 'dose_reminders',
+                        color: '#5DC1C8',
+                        tag: slotId,
+                        icon: 'ic_notification',
+                      },
+                    },
                     apns: {
-                      payload: { aps: { sound: 'default', badge: 1 } },
+                      headers: {
+                        'apns-collapse-id': slotId,
+                        'apns-priority': '10',
+                      },
+                      payload: {
+                        aps: {
+                          sound: 'default',
+                          badge: 1,
+                          mutableContent: true,
+                          'interruption-level': 'time-sensitive',
+                        },
+                      },
                     },
                   })
                 } catch (err: unknown) {
