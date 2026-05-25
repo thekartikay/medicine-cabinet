@@ -1,7 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import {
   initializeAppCheck,
-  ReCaptchaEnterpriseProvider,
+  ReCaptchaV3Provider,
 } from 'firebase/app-check';
 import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth';
 import {
@@ -35,21 +35,22 @@ export const app = initializeApp(firebaseConfig);
 // protects nothing — so we skip client init in DEV entirely. Server-side
 // enforcement is gated by ENFORCE_APP_CHECK (process.env.FUNCTIONS_EMULATOR).
 //
-// In production we still need a `window` (reCAPTCHA Enterprise is browser-
-// only) and a configured VITE_RECAPTCHA_SITE_KEY.
+// In production we still need a `window` (reCAPTCHA is browser-only) and a
+// configured VITE_RECAPTCHA_SITE_KEY.
+//
+// AK-117 — use ReCaptchaV3Provider, not Enterprise. Firebase Phone Auth
+// always uses reCAPTCHA Enterprise (window.grecaptcha.enterprise). If App
+// Check also registered an Enterprise key here, both consumers race to
+// register on the same global namespace and Phone OTP fails on production
+// with "Invalid site key or not loaded in api.js". v3 lives on the separate
+// window.grecaptcha namespace, so the two coexist cleanly.
 if (!import.meta.env.DEV && typeof window !== 'undefined') {
   const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined;
   if (siteKey) {
     initializeAppCheck(app, {
-      provider: new ReCaptchaEnterpriseProvider(siteKey),
+      provider: new ReCaptchaV3Provider(siteKey),
       isTokenAutoRefreshEnabled: true,
     });
-  } else {
-    // eslint-disable-next-line no-console
-    console.warn(
-      '[AppCheck] VITE_RECAPTCHA_SITE_KEY is not set in this production build — ' +
-      'callable Cloud Functions with enforceAppCheck:true will reject requests.',
-    );
   }
 }
 
