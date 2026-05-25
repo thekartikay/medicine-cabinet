@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { signOut, type User as FirebaseUser } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
-import { Bell, MessageCircle, Globe, UserPlus, LogOut, Check, User as UserIcon } from 'lucide-react'
+import { Bell, MessageCircle, Globe, UserPlus, LogOut, Check, User as UserIcon, MapPin } from 'lucide-react'
 import i18n from '../lib/i18n'
 import { auth, functions } from '../lib/firebase'
 import {
@@ -14,6 +14,7 @@ import { InviteMember, computeJoinCode } from './InviteMember'
 import { DeleteAccountSection } from './DeleteAccountSection'
 import { AdminMemberView } from './AdminMemberView'
 import { Profile } from './Profile'
+import { Addresses } from './Addresses'
 
 interface Props {
   user: FirebaseUser
@@ -41,7 +42,7 @@ const LANGUAGES = [
 ] as const
 
 export function SettingsTab({ user, role, hId, householdName, currentUid, currentUserName, isAdmin, onAccountDeleted }: Props) {
-  const [view, setView]                 = useState<'list' | 'invite' | 'member' | 'profile'>('list')
+  const [view, setView]                 = useState<'list' | 'invite' | 'member' | 'profile' | 'addresses'>('list')
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
   const [members, setMembers]           = useState<HouseholdMember[] | null>(null)
   const [appUser, setAppUser]           = useState<AppUser | null>(null)
@@ -127,6 +128,15 @@ export function SettingsTab({ user, role, hId, householdName, currentUid, curren
     )
   }
 
+  if (view === 'addresses') {
+    return (
+      <Addresses
+        hId={hId}
+        onBack={() => setView('list')}
+      />
+    )
+  }
+
   if (view === 'invite') {
     return (
       <InviteMember
@@ -178,6 +188,24 @@ export function SettingsTab({ user, role, hId, householdName, currentUid, curren
           <span className="st-row-chev" aria-hidden="true">›</span>
         </button>
       </section>
+
+      {/* ─── Delivery Addresses (AK-163) ────────────────────────── */}
+      {isAdmin && (
+        <section className="db-card st-card">
+          <button
+            type="button"
+            className="st-row-button"
+            onClick={() => setView('addresses')}
+          >
+            <span className="st-toggle-icon st-toggle-icon--robin"><MapPin size={16} /></span>
+            <div className="st-toggle-text">
+              <span className="st-toggle-label">Delivery Addresses</span>
+              <span className="st-toggle-sub">Where to send your medicines</span>
+            </div>
+            <span className="st-row-chev" aria-hidden="true">›</span>
+          </button>
+        </section>
+      )}
 
       {/* ─── Section 1 — Active member (admin only) ─────────────── */}
       {isAdmin && (

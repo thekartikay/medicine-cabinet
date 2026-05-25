@@ -38,6 +38,8 @@ import {
   notificationsCollectionPath,
   restockRequestsCollectionPath,
   restockRequestPath,
+  addressesCollectionPath,
+  addressPath,
   todaySummaryPath,
   consentVersionPath,
   CURRENT_POLICY_VERSION,
@@ -45,6 +47,7 @@ import {
   todayISTString,
 } from '../lib/paths'
 import type {
+  Address,
   AppUser,
   CabinetItem,
   CabinetItemUnit,
@@ -1400,4 +1403,137 @@ export async function updateUserPreferences(
   }>,
 ): Promise<void> {
   await setDoc(doc(db, userPath(uid)), prefs, { merge: true })
+}
+
+// ── Addresses (AK-163) ─────────────────────────────────────────
+//
+// Admin-managed delivery address book. Mirrors the cabinet-items CRUD shape:
+// client-generated id, server timestamps, soft-delete via disposedAt.
+// placeId / latitude / longitude / formattedAddress are intentionally
+// immutable post-create — to change the underlying place the user picks the
+// address from scratch via the search flow. The narrow updateAddress
+// whitelist enforces that contract.
+
+export async function addAddress(
+  hId: string,
+  data: {
+    label: string
+    recipientName: string
+    recipientPhone: string
+    houseNumber: string
+    apartmentName?: string | null
+    area: string
+    city: string
+    state: string
+    pincode: string
+    country: string
+    landmark?: string | null
+    placeId: string
+    latitude: number
+    longitude: number
+    formattedAddress: string
+    isDefault: boolean
+  },
+): Promise<string> {
+  const addressId = crypto.randomUUID()
+  await setDoc(doc(db, addressPath(hId, addressId)), {
+    ...data,
+    addressId,
+    hId,
+    disposedAt: null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  })
+  return addressId
+}
+
+export async function updateAddress(
+  hId: string,
+  addressId: string,
+  updates: {
+    label?: string
+    recipientName?: string
+    recipientPhone?: string
+    houseNumber?: string
+    apartmentName?: string | null
+    area?: string
+    city?: string
+    state?: string
+    pincode?: string
+    country?: string
+    landmark?: string | null
+  },
+): Promise<void> {
+  await updateDoc(doc(db, addressPath(hId, addressId)), {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+// Soft-delete an address. The doc is preserved so any future order-history
+// view that references the addressId still resolves; subscribeAddresses /
+// getAddresses filter disposed rows out of the UI.
+export async function disposeAddress(
+  hId: string,
+  addressId: string,
+): Promise<void> {
+  await updateDoc(doc(db, addressPath(hId, addressId)), {
+    disposedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  })
+}
+
+// Atomically promote an address to default: clear the previous default's
+// isDefault flag, set the new one's, and update household.defaultAddressId
+// so the household doc remains the source of truth. The denormalised
+// per-address isDefault boolean is purely a convenience for the list view
+// (avoids a separate household read).
+export async function setDefaultAddress(
+  hId: string,
+  addressId: string,
+): Promise<void> {
+  await runTransaction(db, async tx => {
+    const householdRef = doc(db, householdPath(hId))
+    const householdSnap = await tx.get(householdRef)
+    const previousDefaultId =
+      (householdSnap.data()?.defaultAddressId as string | null | undefined) ?? null
+
+    if (previousDefaultId && previousDefaultId !== addressId) {
+      tx.update(doc(db, addressPath(hId, previousDefaultId)), {
+        isDefault: false,
+        updatedAt: serverTimestamp(),
+      })
+    }
+
+    tx.update(doc(db, addressPath(hId, addressId)), {
+      isDefault: true,
+      updatedAt: serverTimestamp(),
+    })
+
+    tx.update(householdRef, { defaultAddressId: addressId })
+  })
+}
+
+export function subscribeAddresses(
+  hId: string,
+  onData: (addresses: Address[]) => void,
+  onError?: (error: Error) => void,
+): () => void {
+  return onSnapshot(
+    collection(db, addressesCollectionPath(hId)),
+    snap => {
+      const rows = snap.docs
+        .map(d => d.data() as Address)
+        .filter(a => !a.disposedAt)
+      onData(rows)
+    },
+    err => onError?.(err),
+  )
+}
+
+export async function getAddresses(hId: string): Promise<Address[]> {
+  const snap = await getDocs(collection(db, addressesCollectionPath(hId)))
+  return snap.docs
+    .map(d => d.data() as Address)
+    .filter(a => !a.disposedAt)
 }

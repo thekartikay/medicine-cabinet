@@ -48,6 +48,11 @@ export const restockRequestsCollectionPath = (hId: string) =>
   `households/${hId}/restockRequests`
 export const restockRequestPath = (hId: string, requestId: string) =>
   `households/${hId}/restockRequests/${requestId}`
+// AK-163 — Delivery address book scoped to a household.
+export const addressesCollectionPath = (hId: string) =>
+  `households/${hId}/addresses`
+export const addressPath = (hId: string, addressId: string) =>
+  `households/${hId}/addresses/${addressId}`
 export const consentLogPath = (uid: string) => `consentLog/${uid}`
 // MC-017a — versioned consent subcollection. Append-only: each consent
 // (initial + every policy-bump re-consent) writes a new doc; rules block

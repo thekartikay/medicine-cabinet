@@ -47,6 +47,42 @@ export interface Household {
   memberUids: string[]
   createdAt: Timestamp
   lastAuditAt: Timestamp | null
+  // AK-163 — Points at households/{hId}/addresses/{addressId} when the
+  // admin has marked an address as the default delivery destination.
+  // Maintained transactionally with the matching address doc's isDefault
+  // boolean by setDefaultAddress(); older household docs predating AK-163
+  // simply read as undefined.
+  defaultAddressId?: string | null
+}
+
+// AK-163 — Delivery address record. Lives at households/{hId}/addresses/{addressId}.
+// Admin-managed only (rules); caregivers and members get no access. The
+// placeId / latitude / longitude / formattedAddress fields come from Google
+// Places and let us re-query the canonical place later if Google's database
+// updates the address. House number is user-typed because Indian Places
+// results rarely carry door/flat numbers.
+export interface Address {
+  addressId: string
+  hId: string
+  label: string
+  recipientName: string
+  recipientPhone: string
+  houseNumber: string
+  apartmentName?: string | null
+  area: string
+  city: string
+  state: string
+  pincode: string
+  country: string
+  landmark?: string | null
+  placeId: string
+  latitude: number
+  longitude: number
+  formattedAddress: string
+  isDefault: boolean
+  createdAt: Timestamp
+  updatedAt: Timestamp
+  disposedAt: Timestamp | null
 }
 
 export interface HouseholdMember {

@@ -387,6 +387,15 @@ service cloud.firestore {
                        && onlyChanges(['status', 'resolvedAt']);
         allow delete: if false;
       }
+
+      // ── /households/{hId}/addresses/{addressId} ───────────────────────
+      // AK-163 — Delivery address book. Admin-only across the board.
+      // Members and caregivers get no access (members don't manage household
+      // logistics; caregivers' grant scope is the dose summary only).
+      match /addresses/{addressId} {
+        allow read:  if isAdmin(hId);
+        allow write: if isAdmin(hId);
+      }
     }
   }
 }
