@@ -3,7 +3,7 @@ import { signOut } from 'firebase/auth'
 import type { User } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import {
-  Home, Pill, HeartPulse, Settings as SettingsIcon,
+  Home, Pill, CalendarHeart, Settings as SettingsIcon,
   Check, Clock, X, Minus, Bell, ChevronDown, BriefcaseMedical,
 } from 'lucide-react'
 import { auth, functions } from '../lib/firebase'
@@ -733,7 +733,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   const NAV_TABS = [
     { id: 'dashboard'  as const, label: 'Home',       Icon: Home         },
     { id: 'cabinet'    as const, label: 'Cabinet',    Icon: Pill         },
-    { id: 'treatments' as const, label: 'Treatments', Icon: HeartPulse   },
+    { id: 'treatments' as const, label: 'Treatments', Icon: CalendarHeart },
     { id: 'settings'   as const, label: 'Settings',   Icon: SettingsIcon },
   ]
 
