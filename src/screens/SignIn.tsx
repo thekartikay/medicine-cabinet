@@ -8,6 +8,7 @@ import {
 } from 'firebase/auth'
 import { auth, googleProvider } from '../lib/firebase'
 import { AuthErrorModal } from '../components/AuthErrorModal'
+import { COUNTRIES } from '../lib/countries'
 
 type View = 'options' | 'phone-input' | 'otp-input'
 
@@ -19,7 +20,11 @@ const MAX_OTP_ATTEMPTS = 3
 
 export function SignIn() {
   const [view, setView] = useState<View>('options')
-  const [phone, setPhone] = useState('+91 ')
+  // AK-118 — phone is composed from (dialCode, localPhone) instead of a single
+  // string. Compose once at send time as `${dialCode}${localPhone.replace(/\D/g,'')}`
+  // — Firebase Auth expects E.164 with no spaces.
+  const [dialCode, setDialCode] = useState('+91')
+  const [localPhone, setLocalPhone] = useState('')
   const [otp, setOtp] = useState('')
   const [authError, setAuthError] = useState<FirebaseError | Error | null>(null)
   const [loading, setLoading] = useState(false)
@@ -97,7 +102,8 @@ export function SignIn() {
     clearAuthError()
     setLoading(true)
     try {
-      const normalizedPhone = phone.replace(/\s/g, '')
+      // AK-118 — compose E.164 from the country picker + local digits.
+      const e164 = dialCode + localPhone.replace(/\D/g, '')
       // Always use a real RecaptchaVerifier. In DEV the
       // auth.settings.appVerificationDisabledForTesting flag set in
       // firebase.ts bypasses the verify() call and the reCAPTCHA Enterprise
@@ -110,7 +116,7 @@ export function SignIn() {
       }
       confirmationRef.current = await signInWithPhoneNumber(
         auth,
-        normalizedPhone,
+        e164,
         recaptchaRef.current,
       )
       setView('otp-input')
@@ -226,25 +232,39 @@ export function SignIn() {
           <>
             <h2 className="si-panel-title">Enter your phone number</h2>
             <label className="si-label" htmlFor="phone-input">Mobile number</label>
-            <input
-              id="phone-input"
-              className="si-pill-input"
-              type="tel"
-              value={phone}
-              onChange={e => setPhone(e.target.value)}
-              placeholder="+91 98765 43210"
-              autoFocus
-            />
+            <div className="si-phone-row">
+              <select
+                className="si-dial-select"
+                value={dialCode}
+                onChange={e => setDialCode(e.target.value)}
+                aria-label="Country code"
+              >
+                {COUNTRIES.map(c => (
+                  <option key={c.code} value={c.dial}>
+                    {c.flag} {c.dial}
+                  </option>
+                ))}
+              </select>
+              <input
+                id="phone-input"
+                className="si-pill-input si-phone-input"
+                type="tel"
+                value={localPhone}
+                onChange={e => setLocalPhone(e.target.value.replace(/[^\d\s\-()]/g, ''))}
+                placeholder="98765 43210"
+                autoFocus
+              />
+            </div>
             <button
               className="si-pill-btn si-pill-btn--action"
               onClick={handleSendOtp}
-              disabled={loading || phone.replace(/\D/g, '').length < 10}
+              disabled={loading || localPhone.replace(/\D/g, '').length < (dialCode === '+91' ? 10 : 7)}
             >
               {loading ? 'Sending…' : 'Send code'}
             </button>
             <button
               className="si-back"
-              onClick={() => { setView('options'); setPhone('+91 '); clearAuthError() }}
+              onClick={() => { setView('options'); setDialCode('+91'); setLocalPhone(''); clearAuthError() }}
               disabled={loading}
             >
               ← Back
@@ -255,7 +275,7 @@ export function SignIn() {
         {view === 'otp-input' && (
           <>
             <h2 className="si-panel-title">Enter verification code</h2>
-            <p className="si-hint">Code sent to {phone.trim()}</p>
+            <p className="si-hint">Code sent to {dialCode} {localPhone.trim()}</p>
 
             {isLockedOut ? (
               <div className="si-lockout" role="alert">

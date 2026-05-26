@@ -836,6 +836,39 @@
   padding: 14px 24px;
 }
 
+/* AK-118 — Country code picker + local phone, side-by-side. The select pops
+   to a white pill that visually separates from the dark-teal panel; the
+   input grows to fill remaining space. */
+.si-phone-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.si-dial-select {
+  flex-shrink: 0;
+  border: 1.5px solid #e0e0e0;
+  border-radius: 9999px;
+  padding: 10px 12px;
+  font-size: 15px;
+  background: #fff;
+  color: #106470;
+  cursor: pointer;
+  height: 46px;
+}
+
+.si-phone-input {
+  flex: 1;
+}
+
+/* AK-166 — InviteMember helper hint under the phone field. Muted teal so it
+   reads as guidance, not error. */
+.im-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  margin: -4px 0 12px;
+}
+
 .si-hint {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.65);
