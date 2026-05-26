@@ -85,6 +85,34 @@ export interface Address {
   disposedAt: Timestamp | null
 }
 
+// AK-166 — Pending invite issued by an admin for a yet-to-join family member.
+// Lives at: households/{hId}/pendingInvites/{inviteId}
+//
+// The phone-OTP flow is the binding mechanism: when the invited person signs
+// in with the matching phone number and calls joinHousehold with this
+// inviteId, the Cloud Function validates request.auth.token.phone_number
+// equals phoneE164 before consuming the invite. The pre-staged memberName
+// and languagePref are then copied to the new member doc, so the invitee
+// sees their own name (typed by the admin) rather than the OTP-default.
+//
+// status transitions:
+//   pending → redeemed   (Cloud Function consumed it on join)
+//   pending → revoked    (admin manually revoked from the invite list — future UI)
+//   pending → expired    (expiresAt passed without redemption; swept by a future cron)
+export interface PendingInvite {
+  inviteId: string
+  hId: string
+  phoneE164: string                       // e.g. '+919876543210' — exact match against userRecord.phoneNumber
+  memberName: string
+  languagePref: 'en' | 'hi' | 'kn' | 'ta' | 'te'
+  createdBy: string                       // admin uid
+  createdAt: Timestamp
+  expiresAt: Timestamp                    // createdAt + 7 days
+  status: 'pending' | 'redeemed' | 'expired' | 'revoked'
+  redeemedBy: string | null
+  redeemedAt: Timestamp | null
+}
+
 export interface HouseholdMember {
   uid: string
   hId: string

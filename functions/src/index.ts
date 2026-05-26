@@ -83,14 +83,28 @@ export const joinHousehold = onCall(
     }
     const uid = request.auth.uid
 
-    const raw = (request.data ?? {}) as { joinCode?: unknown }
+    // AK-166 — Caller provides EITHER joinCode (legacy stateless share) OR
+    // inviteId+hId (pre-staged invite, phone-bound). The inviteId path
+    // skips the household scan (O(1) doc read) and copies the admin's
+    // pre-staged memberName + languagePref onto the new member doc.
+    const raw = (request.data ?? {}) as {
+      joinCode?: unknown
+      inviteId?: unknown
+      hId?: unknown
+    }
     const joinCode =
-      typeof raw.joinCode === 'string' ? raw.joinCode.trim() : ''
-    if (!/^\d{6}$/.test(joinCode)) {
+      typeof raw.joinCode === 'string' ? raw.joinCode.trim() : null
+    const inviteId =
+      typeof raw.inviteId === 'string' ? raw.inviteId.trim() : null
+
+    if (!joinCode && !inviteId) {
+      throw new HttpsError('invalid-argument', 'Provide joinCode or inviteId.')
+    }
+    if (joinCode && !/^\d{6}$/.test(joinCode)) {
       throw new HttpsError('invalid-argument', 'joinCode must be a 6-digit string.')
     }
 
-    // 1. Reject if the caller already belongs to a household.
+    // Reject if the caller already belongs to a household.
     const userRecord = await auth.getUser(uid)
     const existingClaims = userRecord.customClaims ?? {}
     if (existingClaims.hId) {
@@ -100,24 +114,116 @@ export const joinHousehold = onCall(
       )
     }
 
-    // 2. Find the household whose hId hashes to this code.
-    const allHouseholds = await db.collection('households').get()
     let matchedHId: string | null = null
     let matchedName: string | null = null
-    for (const docSnap of allHouseholds.docs) {
-      if (computeJoinCode(docSnap.id) === joinCode) {
-        matchedHId = docSnap.id
-        matchedName = (docSnap.data().name as string | undefined) ?? 'Household'
-        break
+    // Defaults match the legacy joinCode path. Both invite branches override
+    // these from the matched invite doc.
+    let memberDisplayName: string | null = userRecord.displayName ?? null
+    let memberLanguagePref: 'en' | 'hi' | 'kn' | 'ta' | 'te' = 'en'
+    // Explicit inviteId path redeems inside the transaction (atomic with the
+    // member-create). The opportunistic joinCode auto-match redeems outside
+    // (best-effort — the member is already in by then, a failed redemption
+    // just leaves the invite as 'pending' for the future expiry sweep).
+    let inviteRefToRedeem: FirebaseFirestore.DocumentReference | null = null
+    let opportunisticInviteRef: FirebaseFirestore.DocumentReference | null = null
+
+    if (inviteId) {
+      // ── AK-166 inviteId path ────────────────────────────────────────
+      const hIdInput =
+        typeof raw.hId === 'string' ? raw.hId.trim() : null
+      if (!hIdInput) {
+        throw new HttpsError('invalid-argument', 'hId is required with inviteId.')
+      }
+
+      const inviteRef = db.doc(`households/${hIdInput}/pendingInvites/${inviteId}`)
+      const inviteSnap = await inviteRef.get()
+      if (!inviteSnap.exists) {
+        throw new HttpsError('not-found', 'Invite not found.')
+      }
+      const invite = inviteSnap.data() as {
+        phoneE164?: string
+        memberName?: string
+        languagePref?: 'en' | 'hi' | 'kn' | 'ta' | 'te'
+        status?: string
+        expiresAt?: { toMillis: () => number }
+      }
+
+      if (invite.status !== 'pending') {
+        throw new HttpsError('failed-precondition', 'Invite already used or revoked.')
+      }
+      if (invite.expiresAt && invite.expiresAt.toMillis() < Date.now()) {
+        throw new HttpsError('failed-precondition', 'Invite has expired.')
+      }
+      const userPhone = userRecord.phoneNumber ?? null
+      if (!userPhone || !invite.phoneE164 || userPhone !== invite.phoneE164) {
+        throw new HttpsError(
+          'permission-denied',
+          'This invite is for a different phone number.',
+        )
+      }
+
+      // Fetch the household name for the response payload.
+      const hSnap = await db.doc(`households/${hIdInput}`).get()
+      if (!hSnap.exists) {
+        throw new HttpsError('not-found', 'Household not found.')
+      }
+      matchedHId = hIdInput
+      matchedName = (hSnap.data()?.name as string | undefined) ?? 'Household'
+      // Pre-stage the member's surface fields from the admin's input.
+      memberDisplayName = invite.memberName?.trim() || memberDisplayName
+      memberLanguagePref = invite.languagePref ?? memberLanguagePref
+      inviteRefToRedeem = inviteRef
+    } else {
+      // ── Legacy joinCode path ────────────────────────────────────────
+      // TODO(AK-166-followup): persist computeJoinCode(hId) as a queryable
+      // field on the household doc so this becomes an O(1) lookup instead
+      // of a full-collection scan. Acceptable for the beta (~10 households);
+      // revisit before opening signups.
+      const allHouseholds = await db.collection('households').get()
+      for (const docSnap of allHouseholds.docs) {
+        if (computeJoinCode(docSnap.id) === joinCode) {
+          matchedHId = docSnap.id
+          matchedName = (docSnap.data().name as string | undefined) ?? 'Household'
+          break
+        }
+      }
+      if (!matchedHId) {
+        throw new HttpsError('not-found', 'No household with that code.')
+      }
+
+      // AK-166 — Opportunistic phone-match against pendingInvites for this
+      // household. If the joining user's phone matches an admin-issued
+      // invite, copy the pre-staged memberName + languagePref onto the
+      // member doc so the invitee sees their admin-typed name rather than
+      // the OTP-default. Redemption is marked outside the transaction
+      // (see opportunisticInviteRef block below the runTransaction).
+      if (userRecord.phoneNumber) {
+        const inviteSnap = await db
+          .collection(`households/${matchedHId}/pendingInvites`)
+          .where('phoneE164', '==', userRecord.phoneNumber)
+          .where('status', '==', 'pending')
+          .limit(1)
+          .get()
+
+        if (!inviteSnap.empty) {
+          const inv = inviteSnap.docs[0].data() as {
+            memberName?: string
+            languagePref?: 'en' | 'hi' | 'kn' | 'ta' | 'te'
+            expiresAt?: { toMillis: () => number }
+          }
+          const expiresAtMillis = inv.expiresAt?.toMillis?.() ?? 0
+          if (expiresAtMillis > Date.now()) {
+            memberDisplayName = inv.memberName?.trim() || memberDisplayName
+            memberLanguagePref = inv.languagePref ?? memberLanguagePref
+            opportunisticInviteRef = inviteSnap.docs[0].ref
+          }
+        }
       }
     }
-    if (!matchedHId) {
-      throw new HttpsError('not-found', 'No household with that code.')
-    }
 
-    const displayName = userRecord.displayName ?? null
-
-    // 3. Atomic write.
+    // Atomic write: member doc + memberUids + users.householdId, and (on
+    // the inviteId path) flip the invite to 'redeemed' so it can't be
+    // double-consumed.
     await db.runTransaction(async (tx) => {
       const memberRef = db.doc(`households/${matchedHId}/members/${uid}`)
       const memberSnap = await tx.get(memberRef)
@@ -129,8 +235,8 @@ export const joinHousehold = onCall(
         uid,
         hId: matchedHId,
         role: 'member',
-        displayName,
-        languagePref: 'en',
+        displayName: memberDisplayName,
+        languagePref: memberLanguagePref,
         // AK-171 — Phase 1 beta default. Profile UI in Phase 2 will let an
         // admin override on behalf of patients who live in a different zone.
         timezone: 'Asia/Kolkata',
@@ -146,9 +252,33 @@ export const joinHousehold = onCall(
         { householdId: matchedHId },
         { merge: true },
       )
+
+      if (inviteRefToRedeem) {
+        tx.update(inviteRefToRedeem, {
+          status: 'redeemed',
+          redeemedBy: uid,
+          redeemedAt: FieldValue.serverTimestamp(),
+        })
+      }
     })
 
-    // 4. Set custom claims so the security rules treat this user as a member.
+    // AK-166 — Post-transaction redemption for the joinCode auto-match path.
+    // The member doc is already written; this is best-effort. A failed write
+    // here is harmless: the member is in, and a stale 'pending' invite will
+    // either expire on its own or be swept by a future cron.
+    if (opportunisticInviteRef) {
+      try {
+        await opportunisticInviteRef.update({
+          status: 'redeemed',
+          redeemedBy: uid,
+          redeemedAt: FieldValue.serverTimestamp(),
+        })
+      } catch {
+        // Swallow — the join succeeded, the invite cleanup is decorative.
+      }
+    }
+
+    // Set custom claims so the security rules treat this user as a member.
     await auth.setCustomUserClaims(uid, {
       ...existingClaims,
       hId: matchedHId,

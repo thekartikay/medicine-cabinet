@@ -1,4 +1,7 @@
 import { useState } from 'react'
+import { auth } from '../lib/firebase'
+import { createPendingInvite } from '../services/firestoreService'
+import { COUNTRIES } from '../lib/countries'
 
 interface Props {
   household: { hId: string; name: string }
@@ -88,19 +91,61 @@ export function InviteMember({ household, adminName, onDone }: Props) {
   const [memberName, setMemberName] = useState('')
   const [lang, setLang] = useState('en')
   const [copied, setCopied] = useState(false)
+  // AK-166 — Optional phone collection. When provided, we pre-stage a
+  // pendingInvite doc with the member's name + language + phone, and target
+  // the WhatsApp share at the specific recipient (wa.me/<phone>) so the
+  // admin doesn't have to pick from contacts. Empty falls back to the
+  // legacy contact-picker share.
+  const [inviteDialCode, setInviteDialCode] = useState('+91')
+  const [inviteLocalPhone, setInviteLocalPhone] = useState('')
+  const [sending, setSending] = useState(false)
 
   const joinCode = computeJoinCode(household.hId)
 
-  function handleInvite() {
-    const recipient = memberName.trim() || 'there'
-    const message = INVITE_TEXT[lang]({
-      memberName: recipient,
-      adminName,
-      householdName: household.name,
-      joinCode,
-    })
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
-    onDone()
+  async function handleInvite() {
+    if (sending) return
+    setSending(true)
+    try {
+      const recipient = memberName.trim() || 'there'
+      const message = INVITE_TEXT[lang]({
+        memberName: recipient,
+        adminName,
+        householdName: household.name,
+        joinCode,
+      })
+
+      const digits = inviteLocalPhone.replace(/\D/g, '')
+      const hasPhone = digits.length >= (inviteDialCode === '+91' ? 10 : 7)
+
+      if (hasPhone) {
+        const phoneE164 = inviteDialCode + digits
+        // Best-effort write — the WhatsApp share works either way. If the
+        // Firestore write fails (rules / network), we still open WhatsApp
+        // with the contact pre-targeted; the admin can retry from Settings.
+        try {
+          const currentUid = auth.currentUser?.uid
+          if (currentUid) {
+            await createPendingInvite(household.hId, {
+              phoneE164,
+              memberName: recipient,
+              languagePref: lang,
+              createdBy: currentUid,
+            })
+          }
+        } catch {
+          // Swallow — the WhatsApp share is the user-visible outcome.
+        }
+        window.open(
+          `https://wa.me/${phoneE164.replace('+', '')}?text=${encodeURIComponent(message)}`,
+          '_blank',
+        )
+      } else {
+        window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
+      }
+      onDone()
+    } finally {
+      setSending(false)
+    }
   }
 
   async function handleCopyCode() {
@@ -150,6 +195,35 @@ export function InviteMember({ household, adminName, onDone }: Props) {
           autoFocus
         />
 
+        <label className="si-label" htmlFor="invite-phone">Phone number</label>
+        <div className="si-phone-row">
+          <select
+            className="si-dial-select"
+            value={inviteDialCode}
+            onChange={e => setInviteDialCode(e.target.value)}
+            aria-label="Country code"
+          >
+            {COUNTRIES.map(c => (
+              <option key={c.code} value={c.dial}>
+                {c.flag} {c.dial}
+              </option>
+            ))}
+          </select>
+          <input
+            id="invite-phone"
+            className="si-pill-input si-phone-input"
+            type="tel"
+            value={inviteLocalPhone}
+            onChange={e => setInviteLocalPhone(e.target.value.replace(/[^\d\s\-()]/g, ''))}
+            placeholder="Phone number"
+          />
+        </div>
+        <p className="im-hint">
+          {inviteLocalPhone.trim() === ''
+            ? 'Add phone for direct WhatsApp invite (optional)'
+            : 'Opens WhatsApp directly to send your invite'}
+        </p>
+
         <label className="si-label" htmlFor="invite-lang">Language</label>
         <select
           id="invite-lang"
@@ -165,10 +239,12 @@ export function InviteMember({ household, adminName, onDone }: Props) {
         <button
           className="si-pill-btn si-pill-btn--whatsapp"
           onClick={handleInvite}
-          disabled={!memberName.trim()}
+          disabled={!memberName.trim() || sending}
         >
           <WhatsAppIcon />
-          <span className="si-pill-label">Send invite via WhatsApp</span>
+          <span className="si-pill-label">
+            {sending ? 'Opening WhatsApp…' : 'Send invite via WhatsApp'}
+          </span>
         </button>
 
         <button className="si-back" onClick={onDone}>

@@ -396,6 +396,18 @@ service cloud.firestore {
         allow read:  if isAdmin(hId);
         allow write: if isAdmin(hId);
       }
+
+      // ── /households/{hId}/pendingInvites/{inviteId} ───────────────────
+      // AK-166 — Pre-staged member invites. Admins of the household issue
+      // them (createPendingInvite); the joinHousehold Cloud Function (Admin
+      // SDK, bypasses rules) consumes them after validating that the
+      // joining user's phone number matches phoneE164. Direct reads from
+      // the joining user are deliberately blocked so the consume path can
+      // only run through the validated callable.
+      match /pendingInvites/{inviteId} {
+        allow read:  if isAdmin(hId);
+        allow write: if isAdmin(hId);
+      }
     }
   }
 }

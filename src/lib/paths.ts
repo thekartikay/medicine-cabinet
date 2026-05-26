@@ -53,6 +53,12 @@ export const addressesCollectionPath = (hId: string) =>
   `households/${hId}/addresses`
 export const addressPath = (hId: string, addressId: string) =>
   `households/${hId}/addresses/${addressId}`
+// AK-166 — Pending invite docs issued by admins. The invitee's auth.phoneNumber
+// is matched against the doc's phoneE164 in joinHousehold before consumption.
+export const pendingInvitesCol = (hId: string) =>
+  `households/${hId}/pendingInvites`
+export const pendingInviteDoc = (hId: string, inviteId: string) =>
+  `households/${hId}/pendingInvites/${inviteId}`
 export const consentLogPath = (uid: string) => `consentLog/${uid}`
 // MC-017a — versioned consent subcollection. Append-only: each consent
 // (initial + every policy-bump re-consent) writes a new doc; rules block

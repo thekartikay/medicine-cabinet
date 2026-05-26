@@ -40,6 +40,7 @@ import {
   restockRequestPath,
   addressesCollectionPath,
   addressPath,
+  pendingInviteDoc,
   todaySummaryPath,
   consentVersionPath,
   CURRENT_POLICY_VERSION,
@@ -61,6 +62,7 @@ import type {
   MasterMedicine,
   Notification,
   PauseEntry,
+  PendingInvite,
   Regimen,
   RestockRequest,
   ScheduleType,
@@ -484,6 +486,40 @@ export function subscribeTreatments(
 export async function getHouseholdMembers(hId: string): Promise<HouseholdMember[]> {
   const snap = await getDocs(collection(db, membersCollectionPath(hId)))
   return snap.docs.map(d => d.data() as HouseholdMember)
+}
+
+// AK-166 — Pre-stage an invite the admin issued for a yet-to-join member.
+// joinHousehold reads this doc, validates phoneE164 against the joining user's
+// Firebase Auth phone number, and copies memberName + languagePref onto the
+// new member doc. Returns the inviteId so the admin UI can include it in a
+// deep link (Piece C).
+export async function createPendingInvite(
+  hId: string,
+  data: {
+    phoneE164: string
+    memberName: string
+    languagePref: string
+    createdBy: string
+  },
+): Promise<string> {
+  const inviteId = crypto.randomUUID()
+  const now = Timestamp.now()
+  const expiresAt = Timestamp.fromMillis(now.toMillis() + 7 * 24 * 60 * 60 * 1000)
+  const invite: PendingInvite = {
+    inviteId,
+    hId,
+    phoneE164: data.phoneE164,
+    memberName: data.memberName,
+    languagePref: data.languagePref as PendingInvite['languagePref'],
+    createdBy: data.createdBy,
+    createdAt: now,
+    expiresAt,
+    status: 'pending',
+    redeemedBy: null,
+    redeemedAt: null,
+  }
+  await setDoc(doc(db, pendingInviteDoc(hId, inviteId)), invite)
+  return inviteId
 }
 
 // Convenience: resolves the household default cabinet and returns its items.
