@@ -219,10 +219,14 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   const [lateOptions, setLateOptions] = useState<string[]>([])
   const [lateTimeChoice, setLateTimeChoice] = useState('')
   const [logError, setLogError] = useState('')
-  // Local-only reminder state (Fix 5). Persisting to Firestore is a follow-up
-  // when the actual notification dispatch is wired up; for now a tap shows a
-  // toast and the button hides for that slot until the page is reloaded.
-  const [remindedSlots, setRemindedSlots] = useState<Set<string>>(new Set())
+  // AK-173 — Rate-limit "Remind" to one tap per slot per 30 min. Map values
+  // are the Date.now() at the moment the reminder fired; the button stays
+  // disabled while the entry is present, and a setTimeout auto-deletes the
+  // entry 30 min later so a genuine retry remains possible. Component-state
+  // only — a tab refresh re-enables every slot, matching the prior "session
+  // scoped" behaviour but preventing the within-session panic-tap pattern.
+  const REMIND_COOLDOWN_MS = 30 * 60 * 1000
+  const [remindedSlots, setRemindedSlots] = useState<Map<string, number>>(new Map())
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   // Admin-mark-as-taken modal: which dose slot is being confirmed, plus a
   // pending flag so the Confirm/Cancel buttons disable while the transaction
@@ -247,11 +251,24 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
 
   async function sendReminder(slot: DoseSlotDisplay) {
     // Optimistic — disable the button immediately. Roll back on failure.
+    const stampedAt = Date.now()
     setRemindedSlots(prev => {
-      const next = new Set(prev)
-      next.add(slot.slotId)
+      const next = new Map(prev)
+      next.set(slot.slotId, stampedAt)
       return next
     })
+    // Auto-clear the entry after the cooldown window so a legitimate retry
+    // (e.g. the patient is still unresponsive an hour later) is possible.
+    // Guarded by the stamp check so a manual rollback (failure path) won't
+    // be undone by this firing later.
+    setTimeout(() => {
+      setRemindedSlots(prev => {
+        if (prev.get(slot.slotId) !== stampedAt) return prev
+        const next = new Map(prev)
+        next.delete(slot.slotId)
+        return next
+      })
+    }, REMIND_COOLDOWN_MS)
     try {
       const callable = httpsCallable(functions, 'sendDoseReminder')
       await callable({
@@ -264,7 +281,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
       setToastMessage(`Reminder sent to ${slot.memberName ?? 'them'}`)
     } catch (err) {
       setRemindedSlots(prev => {
-        const next = new Set(prev)
+        const next = new Map(prev)
         next.delete(slot.slotId)
         return next
       })
@@ -915,6 +932,11 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                           const { taken, pending, missed } = countsFor(b)
                           const memberOpen = expandedMembers.has(b.patientId)
                           const initial = (b.memberName ?? 'M').charAt(0).toUpperCase()
+                          // AK-173 — total = every scheduled dose for this
+                          // member today across all treatments (includes
+                          // skipped, which countsFor intentionally ignores).
+                          const totalCount = Array.from(b.treatments.values())
+                            .reduce((sum, tb) => sum + tb.doses.length, 0)
                           return (
                             <li key={b.patientId} className="db-card db-member-section">
                               <button
@@ -935,6 +957,20 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                   className={`db-chevron${memberOpen ? ' db-chevron--open' : ''}`}
                                 />
                               </button>
+
+                              {/* AK-173 — Daily summary tile. Reframes the
+                                  count chips above as progress ("3 of 5
+                                  today") rather than three competing
+                                  scoreboards. Admin-only; caregivers see
+                                  the chips only. Weekly adherence omitted
+                                  in this phase — needs a new read. */}
+                              {role === 'admin' && totalCount > 0 && (
+                                <div className="db-daily-summary">
+                                  <span className="db-summary-today">
+                                    {taken} of {totalCount} doses today
+                                  </span>
+                                </div>
+                              )}
 
                               {memberOpen && (
                                 <div className="db-member-body">

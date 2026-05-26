@@ -4870,7 +4870,7 @@
 
 .db-count--taken   { color: var(--sprout); }
 .db-count--pending { color: var(--sunshine); }
-.db-count--missed  { color: #E24B4A; }
+.db-count--missed  { color: #FF8985; } /* AK-173 — normalised to --daybreak so the chip stops outshouting the badges */
 
 .db-chevron {
   color: var(--gray-400);
@@ -4878,6 +4878,25 @@
   flex-shrink: 0;
 }
 .db-chevron--open { transform: rotate(180deg); }
+
+/* AK-173 — Daily summary tile under the member-head row. Frames the day as
+   progress (e.g. "3 of 5 doses today") rather than the three competing
+   count chips above. Weekly adherence tone classes wired up but unused in
+   Phase 1 — left here so adding the week line in a follow-up is one prop. */
+.db-daily-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px 8px;
+  font-size: 13px;
+}
+.db-summary-today {
+  color: #555;
+  font-weight: 500;
+}
+.db-summary-week--good { color: #639922; font-weight: 600; }
+.db-summary-week--warn { color: #B47800; font-weight: 600; }
+.db-summary-week--low  { color: #FF8985; font-weight: 600; }
 
 .db-member-body {
   padding: 0 12px 12px;

@@ -728,8 +728,8 @@ export const markMissedDoses = onSchedule(
 
     for (const hDoc of households.docs) {
       const hId = hDoc.id
-      const household = hDoc.data() as { adminIds?: string[] }
-      const adminIds = household.adminIds ?? []
+      // AK-173 — adminIds no longer needed here; sendDailyMissedDigest at
+      // 19:30 IST owns admin fan-out and reads adminIds at its own scope.
 
       const treatments = await db
         .collection(`households/${hId}/treatments`)
@@ -831,60 +831,9 @@ export const markMissedDoses = onSchedule(
                 // missed log in the dashboard.
               }
 
-              for (const adminId of adminIds) {
-                const adminData = await getUser(adminId)
-                if (!adminData?.fcmToken) continue
-                if (adminData.pushNotificationsEnabled === false) continue
-
-                try {
-                  await messaging.send({
-                    token: adminData.fcmToken as string,
-                    notification: {
-                      title: `Missed dose — ${patientName}`,
-                      body: `${patientName} didn't take their ${medicineName} today`,
-                    },
-                    data: {
-                      type: 'missed_dose',
-                      householdId: hId,
-                      treatmentId: tId,
-                      slotId,
-                      patientId,
-                    },
-                    android: {
-                      priority: 'high',
-                      ttl: 4 * 60 * 60 * 1000,
-                      notification: {
-                        channelId: 'dose_reminders',
-                        color: '#5DC1C8',
-                        tag: slotId,
-                        icon: 'ic_notification',
-                      },
-                    },
-                    apns: {
-                      headers: {
-                        'apns-collapse-id': slotId,
-                        'apns-priority': '10',
-                      },
-                      payload: {
-                        aps: {
-                          sound: 'default',
-                          badge: 1,
-                          mutableContent: true,
-                          'interruption-level': 'time-sensitive',
-                        },
-                      },
-                    },
-                  })
-                } catch (err: unknown) {
-                  const code = (err as { code?: string })?.code
-                  if (code === 'messaging/registration-token-not-registered') {
-                    await db.doc(`users/${adminId}`).update({
-                      fcmToken: FieldValue.delete(),
-                    })
-                    userCache.delete(adminId)
-                  }
-                }
-              }
+              // AK-173 — Per-miss admin push removed; sendDailyMissedDigest
+              // fans out one batched push per patient at 19:30 IST instead.
+              // The in-app notification doc above still lights up the bell.
             }
             continue
           }
@@ -951,8 +900,8 @@ export const markMissedDoses = onSchedule(
 
               // Write a notification for the in-app alerts panel. Deterministic
               // id (`missed_${slotId}`) prevents dupes if the cron ever loops.
-              // Best-effort — a failed notification write must not abort the
-              // admin FCM fan-out below.
+              // Best-effort — a failed notification write must not break the
+              // missed-log creation above.
               const notifId = `missed_${slotId}`
               try {
                 await db.doc(`households/${hId}/notifications/${notifId}`).create({
@@ -973,62 +922,143 @@ export const markMissedDoses = onSchedule(
                 }
               }
 
-              for (const adminId of adminIds) {
-                const adminData = await getUser(adminId)
-                if (!adminData?.fcmToken) continue
-                if (adminData.pushNotificationsEnabled === false) continue
-
-                try {
-                  await messaging.send({
-                    token: adminData.fcmToken as string,
-                    notification: {
-                      title: `Missed dose — ${patientName}`,
-                      body: `${patientName} missed their ${slot.time} ${medicineName}`,
-                    },
-                    data: {
-                      type: 'missed_dose',
-                      householdId: hId,
-                      treatmentId: tId,
-                      slotId,
-                      patientId,
-                    },
-                    android: {
-                      priority: 'high',
-                      ttl: 4 * 60 * 60 * 1000,
-                      notification: {
-                        channelId: 'dose_reminders',
-                        color: '#5DC1C8',
-                        tag: slotId,
-                        icon: 'ic_notification',
-                      },
-                    },
-                    apns: {
-                      headers: {
-                        'apns-collapse-id': slotId,
-                        'apns-priority': '10',
-                      },
-                      payload: {
-                        aps: {
-                          sound: 'default',
-                          badge: 1,
-                          mutableContent: true,
-                          'interruption-level': 'time-sensitive',
-                        },
-                      },
-                    },
-                  })
-                } catch (err: unknown) {
-                  const code = (err as { code?: string })?.code
-                  if (code === 'messaging/registration-token-not-registered') {
-                    await db.doc(`users/${adminId}`).update({
-                      fcmToken: FieldValue.delete(),
-                    })
-                    userCache.delete(adminId)
-                  }
-                  // Otherwise swallow — one bad admin shouldn't abort the cron.
-                }
-              }
+              // AK-173 — Per-miss admin push removed; sendDailyMissedDigest
+              // fans out one batched push per patient at 19:30 IST instead.
+              // The in-app notification doc above still lights up the bell.
             }
+          }
+        }
+      }
+    }
+  },
+)
+
+// ─── sendDailyMissedDigest (AK-173) ─────────────────────────────────────────
+// Daily 19:30 IST roll-up. Replaces the per-miss admin push that
+// markMissedDoses used to fan out throughout the day (one push per missed
+// slot, often 3-5 buzzes per household per day). Instead, each admin gets
+// at most ONE push per patient per day, summarising the day's misses with
+// a softened "Heads up:" opener.
+//
+// Reads today's pre-aggregated todaySummary doc (TodaySummaryMember.missedCount
+// is already counted by maintainTodaySummary / buildTodaySummaryForHousehold)
+// rather than re-scanning logs.
+export const sendDailyMissedDigest = onSchedule(
+  {
+    schedule: '30 19 * * *',
+    timeZone: 'Asia/Kolkata',
+    region: 'asia-south1',
+    minInstances: 0,
+  },
+  async () => {
+    const now = new Date()
+    const todayIST = todayISTDateString(now)
+
+    const userCache = new Map<string, FirebaseFirestore.DocumentData | null>()
+    async function getUser(uid: string) {
+      if (userCache.has(uid)) return userCache.get(uid) ?? null
+      const snap = await db.doc(`users/${uid}`).get()
+      const data = snap.exists ? snap.data() ?? null : null
+      userCache.set(uid, data)
+      return data
+    }
+
+    const households = await db.collection('households').get()
+
+    for (const hDoc of households.docs) {
+      const hId = hDoc.id
+      const household = hDoc.data() as { adminIds?: string[] }
+      const adminIds = household.adminIds ?? []
+      if (adminIds.length === 0) continue
+
+      const summarySnap = await db
+        .doc(`households/${hId}/todaySummary/${todayIST}`)
+        .get()
+      if (!summarySnap.exists) continue
+      const summary = summarySnap.data() as {
+        members?: Record<string, {
+          displayName?: string
+          missedCount?: number
+          slots?: Record<string, { status?: string; medicineName?: string }>
+        }>
+      }
+
+      for (const [patientId, member] of Object.entries(summary.members ?? {})) {
+        const missedCount = member.missedCount ?? 0
+        if (missedCount === 0) continue
+
+        const patientName = member.displayName?.trim() || 'A family member'
+
+        // For the single-miss copy, surface the actual medicine name so the
+        // body reads as a specific reminder rather than a generic count.
+        let singleMedicineName: string | null = null
+        if (missedCount === 1) {
+          for (const slot of Object.values(member.slots ?? {})) {
+            if (slot.status === 'missed') {
+              singleMedicineName = slot.medicineName ?? null
+              break
+            }
+          }
+        }
+
+        const title =
+          `${patientName} missed ${missedCount} dose${missedCount > 1 ? 's' : ''} today`
+        const body =
+          missedCount === 1 && singleMedicineName
+            ? `Heads up: ${patientName} hasn't logged their ${singleMedicineName} today`
+            : `Heads up: ${patientName} missed ${missedCount} doses today`
+
+        const tag = `digest-${hId}-${patientId}`
+
+        for (const adminId of adminIds) {
+          const adminData = await getUser(adminId)
+          if (!adminData?.fcmToken) continue
+          if (adminData.pushNotificationsEnabled === false) continue
+
+          try {
+            await messaging.send({
+              token: adminData.fcmToken as string,
+              notification: { title, body },
+              data: {
+                type: 'daily_missed_digest',
+                patientId,
+                householdId: hId,
+                missedCount: String(missedCount),
+              },
+              android: {
+                priority: 'high',
+                ttl: 4 * 60 * 60 * 1000,
+                notification: {
+                  channelId: 'dose_reminders',
+                  color: '#5DC1C8',
+                  tag,
+                  icon: 'ic_notification',
+                },
+              },
+              apns: {
+                headers: {
+                  'apns-collapse-id': tag,
+                  'apns-priority': '10',
+                },
+                payload: {
+                  aps: {
+                    sound: 'default',
+                    badge: 1,
+                    mutableContent: true,
+                    'interruption-level': 'time-sensitive',
+                  },
+                },
+              },
+            })
+          } catch (err: unknown) {
+            const code = (err as { code?: string })?.code
+            if (code === 'messaging/registration-token-not-registered') {
+              await db.doc(`users/${adminId}`).update({
+                fcmToken: FieldValue.delete(),
+              })
+              userCache.delete(adminId)
+            }
+            // Otherwise swallow — one bad admin shouldn't abort the digest.
           }
         }
       }
