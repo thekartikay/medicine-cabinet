@@ -7,7 +7,14 @@ import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { getAuth } from 'firebase-admin/auth'
 import { getMessaging } from 'firebase-admin/messaging'
 import { randomUUID } from 'node:crypto'
-import { todayISTDateString } from './util/istDate'
+import {
+  todayISTDateString,
+  dateInTz,
+  slotInstant,
+  dayOfWeekInTz,
+  dayOfWeekForDateInTz,
+  previousDateInTz,
+} from './util/tzDate'
 import { ENFORCE_APP_CHECK } from './util/enforceAppCheck'
 
 // MC-004 — Gemini API proxy. Re-exported so deploy picks it up.
@@ -124,6 +131,9 @@ export const joinHousehold = onCall(
         role: 'member',
         displayName,
         languagePref: 'en',
+        // AK-171 — Phase 1 beta default. Profile UI in Phase 2 will let an
+        // admin override on behalf of patients who live in a different zone.
+        timezone: 'Asia/Kolkata',
         joinedAt: FieldValue.serverTimestamp(),
       })
 
@@ -188,6 +198,8 @@ export const createHousehold = onCall(
         hId,
         role: 'admin',
         displayName,
+        // AK-171 — Phase 1 beta default; see joinHousehold comment above.
+        timezone: 'Asia/Kolkata',
         joinedAt: FieldValue.serverTimestamp(),
       })
 
@@ -224,27 +236,15 @@ export const createHousehold = onCall(
 //     identical to buildSlotId() in src/lib/paths.ts so we can detect
 //     already-logged slots without re-deriving the format.
 //
-// Slot times are stored as "HH:MM" in IST. We construct the absolute
-// timestamp by combining today's IST date with the slot's HH:MM and the
-// +05:30 offset, so the comparison to `now` works regardless of the
-// container's timezone.
-
-// todayISTDateString lives in ./util/istDate so the dose reminder cron,
-// maintainTodaySummary triggers, and the geminiProxy rate limiter all share
-// one IST formatter.
-
-// Returns IST day-of-week 0..6 (Sun..Sat) for a given absolute Date.
-function dayOfWeekIST(now: Date): number {
-  const w = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Kolkata', weekday: 'short',
-  }).format(now)
-  return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(w)
-}
-
-// Resolves "today (IST) at HH:MM IST" to an absolute Date.
-function istSlotInstant(dateStr: string, slotHHMM: string): Date {
-  return new Date(`${dateStr}T${slotHHMM}:00+05:30`)
-}
+// AK-171 — slot times are stored as "HH:MM" wall-clock; the timezone they're
+// in lives on the regimen doc (`regimen.timezone`, denormalized from the
+// patient's member doc at create time). slotInstant from ./util/tzDate
+// resolves a (date, time, tz) triple to an absolute UTC instant; the cron
+// passes the regimen's timezone into every conversion so a patient in PST
+// gets their 08:00 reminder at 08:00 PT, not 08:00 IST.
+//
+// Older regimens predating AK-171 carry no timezone field; both crons default
+// to 'Asia/Kolkata' for those, preserving prior behaviour during rollout.
 
 // Friendly "After food" / "Before food" / "With food" suffix for the body.
 function foodLabel(timing: unknown): string {
@@ -265,8 +265,6 @@ export const scheduleDoseNotifications = onSchedule(
     const now = new Date()
     const windowStart = now
     const windowEnd = new Date(now.getTime() + 15 * 60 * 1000)
-    const todayIST = todayISTDateString(now)
-    const dowIST = dayOfWeekIST(now)
 
     // Cache user docs so we don't re-fetch the same patient repeatedly when
     // they have multiple regimens firing in the same window.
@@ -303,25 +301,38 @@ export const scheduleDoseNotifications = onSchedule(
           const rId = rDoc.id
           const regimen = rDoc.data()
 
+          // AK-171 — patient's timezone is denormalized onto the regimen at
+          // create time. Pre-AK-171 docs fall back to IST so the cron stays
+          // correct during the rollout. todayInTz/dowInTz drive start-date /
+          // end-date / specific-days filtering in the patient's local time.
+          const regimenTz = (regimen.timezone as string | undefined) ?? 'Asia/Kolkata'
+          const todayInTz = dateInTz(now, regimenTz)
+          const dowInTz = dayOfWeekInTz(now, regimenTz)
+
           // Skip regimens that aren't active today or aren't time-driven.
           const scheduleType = regimen.scheduleType as string | undefined
           if (scheduleType === 'as-needed') continue
-          if (regimen.startDate && regimen.startDate > todayIST) continue
-          if (regimen.endDate && regimen.endDate < todayIST) continue
+          if (regimen.startDate && regimen.startDate > todayInTz) continue
+          if (regimen.endDate && regimen.endDate < todayInTz) continue
           if (scheduleType === 'specific-days') {
             const days = regimen.scheduleDays as number[] | undefined
-            if (!days?.includes(dowIST)) continue
+            if (!days?.includes(dowInTz)) continue
           }
 
-          // AK-131 — flexible-daily fires its reminder at the 09:00 IST anchor.
-          // The body copy reminds the user they can log the dose at any point
-          // in the day; the slotId carries the `-flex` suffix that pairs with
-          // the synthetic todaySummary slot.
+          // AK-131 — flexible-daily fires its reminder at the 09:00 anchor
+          // in the patient's local time. The body copy reminds the user they
+          // can log the dose at any point in the day; the slotId carries the
+          // `-flex` suffix that pairs with the synthetic todaySummary slot.
           if (scheduleType === 'flexible-daily') {
             const flexTime = '09:00'
-            const slotInstant = istSlotInstant(todayIST, flexTime)
-            if (slotInstant < windowStart || slotInstant > windowEnd) continue
-            const slotId = `${tId}-${rId}-${patientId}-${todayIST}-flex`
+            const instant = slotInstant(todayInTz, flexTime, regimenTz)
+            if (instant < windowStart || instant > windowEnd) continue
+            // AK-171 — slotId date stays IST-anchored (per AK-171 Phase 1
+            // constraint: rewriting slot IDs would orphan existing logs).
+            // dateInTz on the actual UTC instant gives a stable IST date
+            // that matches what the client computes via todayISTString().
+            const slotIdDate = dateInTz(instant, 'Asia/Kolkata')
+            const slotId = `${tId}-${rId}-${patientId}-${slotIdDate}-flex`
 
             const logSnap = await db
               .doc(`households/${hId}/treatments/${tId}/logs/${slotId}`)
@@ -390,11 +401,15 @@ export const scheduleDoseNotifications = onSchedule(
           const slots = (regimen.slots ?? []) as Array<{ time: string; foodTiming?: string }>
           for (const slot of slots) {
             if (typeof slot.time !== 'string' || !/^\d{2}:\d{2}$/.test(slot.time)) continue
-            const slotInstant = istSlotInstant(todayIST, slot.time)
-            if (slotInstant < windowStart || slotInstant > windowEnd) continue
+            // AK-171 — slot wall-clock is interpreted in regimenTz; the actual
+            // UTC instant is what the windowStart/End check compares against.
+            const instant = slotInstant(todayInTz, slot.time, regimenTz)
+            if (instant < windowStart || instant > windowEnd) continue
 
             const hhmm = slot.time.replace(':', '')
-            const slotId = `${tId}-${rId}-${patientId}-${todayIST}-${hhmm}`
+            // AK-171 — slotId date stays IST-anchored (see flex-branch note above).
+            const slotIdDate = dateInTz(instant, 'Asia/Kolkata')
+            const slotId = `${tId}-${rId}-${patientId}-${slotIdDate}-${hhmm}`
 
             // Skip if already logged.
             const logSnap = await db
@@ -685,20 +700,6 @@ export const sendDoseReminder = onCall(
 // IST the cutoff is 23:45 yesterday — a 23:30 yesterday slot is past cutoff
 // and would otherwise never be evaluated.
 
-function dayOfWeekForISTDate(dateStr: string): number {
-  // Anchor at noon IST → unambiguous calendar day in any runtime TZ.
-  return new Date(`${dateStr}T12:00:00+05:30`).getUTCDay()
-}
-
-function previousISTDateString(dateStr: string): string {
-  const d = new Date(`${dateStr}T12:00:00+05:30`)
-  d.setUTCDate(d.getUTCDate() - 1)
-  return new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(d)
-}
-
 export const markMissedDoses = onSchedule(
   {
     schedule: 'every 30 minutes',
@@ -709,9 +710,10 @@ export const markMissedDoses = onSchedule(
   async () => {
     const now = new Date()
     const cutoff = new Date(now.getTime() - 30 * 60 * 1000)
-    const todayIST = todayISTDateString(now)
-    const yesterdayIST = previousISTDateString(todayIST)
-    const dates = [yesterdayIST, todayIST]
+    // AK-171 — `dates` (yesterday + today) is now computed per regimen, in
+    // the regimen's timezone, so non-IST patients don't miss late-night slots
+    // that already rolled over IST midnight but not their own. See per-regimen
+    // block below.
 
     const userCache = new Map<string, FirebaseFirestore.DocumentData | null>()
     async function getUser(uid: string) {
@@ -748,27 +750,39 @@ export const markMissedDoses = onSchedule(
           const rId = rDoc.id
           const regimen = rDoc.data()
 
+          // AK-171 — per-regimen timezone (denormalized from the patient's
+          // member doc). `dates` is yesterday + today in the patient's local
+          // time, so the iteration covers the right pair of calendar days
+          // regardless of when the cron fires relative to UTC.
+          const regimenTz = (regimen.timezone as string | undefined) ?? 'Asia/Kolkata'
+          const todayInTz = dateInTz(now, regimenTz)
+          const yesterdayInTz = previousDateInTz(todayInTz, regimenTz)
+          const dates = [yesterdayInTz, todayInTz]
+
           const scheduleType = regimen.scheduleType as string | undefined
           if (scheduleType === 'as-needed') continue
 
           const slots = (regimen.slots ?? []) as Array<{ time: string; foodTiming?: string }>
           // AK-131 — flexible-daily has no fixed slots but does need a missed
-          // sweep. The end-of-day cutoff is 23:30 IST (+ 30-min grace ⇒ marked
-          // missed shortly after midnight). The log's scheduledAt is recorded
-          // at the 09:00 IST anchor so the rest of the system reads it as a
-          // regular dose.
+          // sweep. The end-of-day cutoff is 23:30 in the patient's local time
+          // (+ 30-min grace ⇒ marked missed shortly after their midnight).
+          // The log's scheduledAt is recorded at the 09:00 anchor so the rest
+          // of the system reads it as a regular dose.
           if (scheduleType === 'flexible-daily') {
             for (const dateStr of dates) {
               if (regimen.startDate && regimen.startDate > dateStr) continue
               if (regimen.endDate && regimen.endDate < dateStr) continue
 
-              const endOfDayInstant = istSlotInstant(dateStr, '23:30')
+              const endOfDayInstant = slotInstant(dateStr, '23:30', regimenTz)
               if (endOfDayInstant > now) continue
               if (endOfDayInstant >= cutoff) continue
 
-              const slotId = `${tId}-${rId}-${patientId}-${dateStr}-flex`
+              const scheduledAtFlex = slotInstant(dateStr, '09:00', regimenTz)
+              // AK-171 — slotId date stays IST-anchored (matches what the
+              // client and the dose-reminder cron compute for the same slot).
+              const slotIdDate = dateInTz(scheduledAtFlex, 'Asia/Kolkata')
+              const slotId = `${tId}-${rId}-${patientId}-${slotIdDate}-flex`
               const logRef = db.doc(`households/${hId}/treatments/${tId}/logs/${slotId}`)
-              const scheduledAtFlex = istSlotInstant(dateStr, '09:00')
 
               try {
                 await logRef.create({
@@ -778,7 +792,7 @@ export const markMissedDoses = onSchedule(
                   hId,
                   patientId,
                   scheduledAt: Timestamp.fromDate(scheduledAtFlex),
-                  scheduledDate: dateStr,
+                  scheduledDate: slotIdDate,
                   scheduledTime: '09:00',
                   status: 'missed',
                   takenAt: null,
@@ -882,19 +896,21 @@ export const markMissedDoses = onSchedule(
             if (regimen.endDate && regimen.endDate < dateStr) continue
             if (scheduleType === 'specific-days') {
               const days = regimen.scheduleDays as number[] | undefined
-              if (!days?.includes(dayOfWeekForISTDate(dateStr))) continue
+              if (!days?.includes(dayOfWeekForDateInTz(dateStr, regimenTz))) continue
             }
 
             for (const slot of slots) {
               if (typeof slot.time !== 'string' || !/^\d{2}:\d{2}$/.test(slot.time)) continue
-              const slotInstant = istSlotInstant(dateStr, slot.time)
+              const instant = slotInstant(dateStr, slot.time, regimenTz)
               // Only mark slots that have already fired AND are past the
               // 30-minute grace window.
-              if (slotInstant > now) continue
-              if (slotInstant >= cutoff) continue
+              if (instant > now) continue
+              if (instant >= cutoff) continue
 
               const hhmm = slot.time.replace(':', '')
-              const slotId = `${tId}-${rId}-${patientId}-${dateStr}-${hhmm}`
+              // AK-171 — slotId date stays IST-anchored; see flex branch note.
+              const slotIdDate = dateInTz(instant, 'Asia/Kolkata')
+              const slotId = `${tId}-${rId}-${patientId}-${slotIdDate}-${hhmm}`
               const logRef = db.doc(`households/${hId}/treatments/${tId}/logs/${slotId}`)
 
               try {
@@ -904,8 +920,8 @@ export const markMissedDoses = onSchedule(
                   rId,
                   hId,
                   patientId,
-                  scheduledAt: Timestamp.fromDate(slotInstant),
-                  scheduledDate: dateStr,
+                  scheduledAt: Timestamp.fromDate(instant),
+                  scheduledDate: slotIdDate,
                   scheduledTime: slot.time,
                   status: 'missed',
                   takenAt: null,

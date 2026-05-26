@@ -21,7 +21,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https'
 import { defineSecret } from 'firebase-functions/params'
 import { getFirestore, FieldValue } from 'firebase-admin/firestore'
 import { GoogleGenAI } from '@google/genai'
-import { todayISTDateString } from './util/istDate'
+import { todayISTDateString } from './util/tzDate'
 import { ENFORCE_APP_CHECK } from './util/enforceAppCheck'
 import type {
   CandidateMedicine,
