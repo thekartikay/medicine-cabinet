@@ -91,6 +91,12 @@ export interface HouseholdMember {
   role: 'admin' | 'member' | 'caregiver'
   displayName: string | null
   joinedAt: Timestamp
+  // AK-171 — IANA timezone string (e.g. 'Asia/Kolkata', 'America/Los_Angeles').
+  // Source of truth for "the patient's local time"; the dose-reminder cron uses
+  // this to decide *when* a slot fires, and regimens denormalize this value at
+  // create time. Older member docs predating AK-171 read as undefined; the cron
+  // treats undefined as 'Asia/Kolkata' (beta default).
+  timezone?: string
 }
 
 // AK-58 — A grant of read-only access to a single household member's data,
@@ -278,6 +284,11 @@ export interface Regimen {
   // IST day; undefined = no client-side limit (older regimens read as such).
   // Only meaningful when scheduleType === 'as-needed'; ignored otherwise.
   maxDosesPerDay?: number
+  // AK-171 — IANA timezone string, denormalized from the patient's member doc
+  // at regimen-create time so the cron doesn't need a member read per fire.
+  // Older regimens predating AK-171 read as undefined; the cron treats
+  // undefined as 'Asia/Kolkata' (beta default).
+  timezone?: string
 }
 
 export interface DoseSlotDisplay {

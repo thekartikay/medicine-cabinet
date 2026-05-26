@@ -1254,6 +1254,11 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
         // (rather than written as undefined → Firestore would reject) for
         // time-driven regimens.
         ...(formScheduleType === 'as-needed' ? { maxDosesPerDay: formMaxDosesPerDay } : {}),
+        // AK-171 — denormalize the patient's timezone onto the regimen so the
+        // dose-reminder cron can compute slot instants without an extra member
+        // read. Falls back to 'Asia/Kolkata' for the AK-171 rollout window when
+        // member docs predating the field have no timezone set yet.
+        timezone: members.find(m => m.uid === formMemberId)?.timezone ?? 'Asia/Kolkata',
       })
       // AK-123 — Audit row stamped only after both writes above succeed,
       // and only when the admin actively acknowledged a soft-warn overlap.

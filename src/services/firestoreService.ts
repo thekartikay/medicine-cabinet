@@ -438,6 +438,11 @@ export async function addRegimen(
     // via ...data into the regimen doc, so when undefined no field is
     // written (older PRN regimens stay unfielded → treated as no limit).
     maxDosesPerDay?: number
+    // AK-171 — IANA timezone denormalized from the patient's member doc.
+    // Caller resolves the value; the cron reads it directly off the regimen
+    // to decide when slots fire. Optional during the AK-171 rollout: pre-AK-171
+    // regimens carry no timezone field and the cron defaults to 'Asia/Kolkata'.
+    timezone?: string
   },
 ): Promise<string> {
   const rId = crypto.randomUUID()
