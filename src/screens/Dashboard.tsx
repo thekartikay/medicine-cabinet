@@ -487,6 +487,11 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   // trigger will create it on the first dose write).
   const [summaryLoaded, setSummaryLoaded] = useState(false)
 
+  // AK-170 — Per-session dismiss for the cold-household welcome card. Resets
+  // on every Dashboard mount; intentionally not persisted, so a household
+  // that genuinely stays cold keeps seeing the prompt next session.
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false)
+
   // Single coordinated effect for today's data:
   //   1. Subscribe to todaySummary on mount.
   //   2. Wait up to 200ms for the first snapshot.
@@ -737,6 +742,14 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
     { id: 'settings'   as const, label: 'Settings',   Icon: SettingsIcon },
   ]
 
+  // AK-170 — A household with no treatments and no cabinet items, after the
+  // initial todaySummary subscription has resolved. Both arrays are already
+  // loaded by other Dashboard effects, so no extra reads are needed.
+  const isColdHousehold =
+    summaryLoaded &&
+    allTreatments.length === 0 &&
+    stockItems.length === 0
+
   return (
     <div className="db-root">
 
@@ -801,6 +814,33 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
 
         {activeTab === 'dashboard' && dashSubview === 'home' && role !== 'member' && (
           <>
+            {/* AK-170 — Welcome card for cold households. Sits above every
+                Home-tab section; dismissed via the × in the corner or
+                superseded automatically once the household has any
+                treatment or cabinet item. */}
+            {isColdHousehold && !welcomeDismissed && (
+              <div className="db-card db-welcome-card">
+                <button
+                  className="db-welcome-dismiss"
+                  onClick={() => setWelcomeDismissed(true)}
+                  aria-label="Dismiss welcome"
+                >
+                  ×
+                </button>
+                <div className="db-welcome-icon">💊</div>
+                <h2 className="db-welcome-title">Welcome to MediCab</h2>
+                <p className="db-welcome-body">
+                  Start by adding a medicine to your cabinet.
+                  Then schedule when to take it — and MediCab handles the rest.
+                </p>
+                <button
+                  className="db-pill-btn db-pill-btn--primary db-welcome-cta"
+                  onClick={() => visitTab('cabinet')}
+                >
+                  Add your first medicine →
+                </button>
+              </div>
+            )}
             <section className="db-section">
               <h2 className="db-section-title">Today's doses</h2>
               {/* AK-127 — Loading indicator shown only before the first
@@ -817,7 +857,12 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                     <Pill size={28} color="#5DC1C8" />
                   </div>
                   <p className="db-empty-text">No treatments set up yet</p>
-                  <p className="db-empty-sub">Add a treatment to start tracking doses</p>
+                  <button
+                    className="db-empty-action"
+                    onClick={() => visitTab('treatments')}
+                  >
+                    Set up a treatment →
+                  </button>
                 </div>
               ) : (
                 <>
@@ -1161,7 +1206,12 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                     <BriefcaseMedical size={28} color="#5DC1C8" />
                   </div>
                   <p className="db-empty-text">Your cabinet is empty</p>
-                  <p className="db-empty-sub">Add medicines to track your stock</p>
+                  <button
+                    className="db-empty-action"
+                    onClick={() => visitTab('cabinet')}
+                  >
+                    Add medicines →
+                  </button>
                 </div>
               ) : (
                 <ul className="cb-item-list">

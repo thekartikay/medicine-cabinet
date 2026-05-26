@@ -1844,7 +1844,11 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
               <CalendarHeart size={28} color="#5DC1C8" />
             </div>
             <p className="db-empty-text">No treatments yet</p>
-            {!readOnly && <p className="db-empty-sub">Add one to start tracking doses.</p>}
+            {!readOnly && (
+              <p className="db-empty-sub">
+                Schedule a medicine and MediCab will remind you — and your family — every day.
+              </p>
+            )}
           </div>
         )}
 

@@ -1204,6 +1204,77 @@
   color: var(--gray-400);
 }
 
+/* AK-170 — Empty-state action button. Pill-shaped CTA used inside the
+   Dashboard's dose-list and stock-alerts empty cards. */
+.db-empty-action {
+  background: none;
+  border: 1.5px solid #5DC1C8;
+  color: #5DC1C8;
+  border-radius: 9999px;
+  padding: 8px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+/* AK-170 — Welcome card for cold households. Stand-alone styling, no
+   dependency on .db-pill-btn (which doesn't exist in this codebase yet).
+   The CTA inside it is fully styled by .db-welcome-cta. */
+.db-welcome-card {
+  position: relative;
+  padding: 24px 20px 20px;
+  background: linear-gradient(135deg, #5DC1C8 0%, #106470 100%);
+  color: #fff;
+  border-radius: 24px;
+  margin-bottom: 12px;
+}
+
+.db-welcome-dismiss {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.db-welcome-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.db-welcome-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: #fff;
+}
+
+.db-welcome-body {
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0 0 16px;
+}
+
+.db-welcome-cta {
+  background: #fff;
+  color: #106470;
+  width: 100%;
+  font-weight: 600;
+  /* Self-sufficient pill styling — .db-pill-btn classes don't exist yet. */
+  border: none;
+  border-radius: 9999px;
+  padding: 12px 20px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
 /* FAB */
 .db-fab {
   position: fixed;
