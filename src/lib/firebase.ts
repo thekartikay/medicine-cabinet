@@ -4,14 +4,11 @@ import {
   ReCaptchaV3Provider,
 } from 'firebase/app-check';
 import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth';
-import {
-  initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
-  connectFirestoreEmulator,
-  doc,
-  updateDoc,
-} from 'firebase/firestore';
+// AK-176 — @firebase/firestore is no longer a top-level value import. The
+// SDK module + the Firestore instance both live behind getFirestoreContext()
+// below, which dynamic-imports the SDK on first use. Type-only imports stay;
+// they're erased at build time.
+import type { Firestore } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 // AK-165 — @firebase/storage and @firebase/messaging are no longer top-level
 // value imports. They're dynamically imported on first use via the lazy
@@ -59,11 +56,70 @@ if (!import.meta.env.DEV && typeof window !== 'undefined') {
 }
 
 export const auth = getAuth(app);
-export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-});
 export const functions = getFunctions(app, 'asia-south1');
 export const googleProvider = new GoogleAuthProvider();
+
+// AK-176 — Memoized lazy Firestore context. Bundles the SDK module with the
+// initialized `db` instance so each service-layer function can destructure
+// `{ db, doc, getDoc, ... }` from one place.
+//
+// CRITICAL — promise memoization invariant:
+// `_firestoreCtx = (async () => { ... })()` assigns the promise *synchronously*
+// before the IIFE awaits anything. Two concurrent first-callers therefore
+// share one underlying initialization (single dynamic import + single
+// initializeFirestore call). Do NOT restructure this to compute the promise
+// after an await — that would let two parallel callers each run initializeFirestore,
+// which Firestore rejects with FailedPrecondition.
+//
+// `initializeFirestore` (NOT getFirestore) is the only Firestore call against
+// `app` and must come before any read/write, so the persistentLocalCache
+// configuration takes effect for every subsequent call. connectFirestoreEmulator
+// runs after the init, before the context resolves — so any awaiter sees a
+// fully-wired-up db.
+//
+// AK-176 (smoke-test hook): when VITE_AK176_TEST_DELAY_MS is set, a `setTimeout`
+// runs *before* the dynamic import. This lets the AK-176 smoke test exercise
+// the "subscribe then unsubscribe before init resolves" race (Step 4 in the
+// ticket). The hook is no-op in production builds — Vite strips the env var
+// at build time, so the conditional collapses to dead code when unset.
+export type FirestoreContext = { db: Firestore } & typeof import('firebase/firestore');
+
+let _firestoreCtx: Promise<FirestoreContext> | null = null;
+export function getFirestoreContext(): Promise<FirestoreContext> {
+  if (_firestoreCtx) return _firestoreCtx;
+  _firestoreCtx = (async () => {
+    const testDelayMs = Number(import.meta.env.VITE_AK176_TEST_DELAY_MS ?? 0);
+    if (testDelayMs > 0) {
+      await new Promise((r) => setTimeout(r, testDelayMs));
+    }
+    const fs = await import('firebase/firestore');
+    const db = fs.initializeFirestore(app, {
+      localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }),
+    });
+    if (import.meta.env.DEV) {
+      fs.connectFirestoreEmulator(db, 'localhost', 8080);
+    }
+    return { db, ...fs };
+  })();
+  return _firestoreCtx;
+}
+
+// AK-176 (test-only seam) — Clears the memoized Firestore context promise so
+// tests/unit/ak176-*.test.ts can re-arm the deferred-init race or stage an
+// init-rejection scenario. Production safety: Vite replaces `import.meta.env.MODE`
+// with the literal build-mode string, so in a production build this becomes
+// `if ('production' !== 'test') return;` — Rollup folds the conditional and the
+// function body is dead code in shipped bundles. Vitest sets MODE='test', so
+// the reset only takes effect under the test runner.
+//
+// IMPORTANT: clearing the memo does NOT undo a successful `initializeFirestore`
+// against the underlying Firebase app. A subsequent getFirestoreContext() that
+// runs the IIFE again will hit Firestore's "already started" guard and reject —
+// which is itself a useful failure mode the init-rejection test exercises.
+export function __resetFirestoreContextForTest(): void {
+  if (import.meta.env.MODE !== 'test') return;
+  _firestoreCtx = null;
+}
 
 // AK-165 — Lazy storage. Memoized; the @firebase/storage SDK is fetched on
 // first call to getStorageInstance() rather than at module load. No client
@@ -111,7 +167,8 @@ if (import.meta.env.DEV) {
   // but the SDK no longer validates it.
   auth.settings.appVerificationDisabledForTesting = true;
   connectAuthEmulator(auth, 'http://localhost:9099');
-  connectFirestoreEmulator(db, 'localhost', 8080);
+  // AK-176 — connectFirestoreEmulator(db, 'localhost', 8080) moved into
+  // getFirestoreContext() above so it runs after the deferred Firestore init.
   connectFunctionsEmulator(functions, 'localhost', 5001);
 }
 
@@ -151,6 +208,8 @@ export async function requestNotificationPermission(uid: string): Promise<void> 
     const token = await getToken(m, { vapidKey });
     if (!token) return;
 
+    // AK-176 — Firestore primitives + db come from the deferred context.
+    const { db, doc, updateDoc } = await getFirestoreContext();
     await updateDoc(doc(db, 'users', uid), { fcmToken: token });
   } catch {
     // Never let a notification-registration failure break the auth flow.
