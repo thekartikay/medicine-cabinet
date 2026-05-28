@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { auth, functions, requestNotificationPermission } from './lib/firebase'
@@ -11,15 +11,20 @@ import {
   getMemberDisplayName,
   syncMemberDisplayName,
 } from './services/firestoreService'
+// AK-165 — SignIn stays eager because it's the first-paint screen for any
+// unauthenticated visit. OfflineBanner is the chrome that always renders.
+// Everything else is post-auth and goes lazy — Dashboard pulls Cabinet /
+// Treatments / MemberDoseCard / Settings transitively, which is the bulk of
+// the cut to the entry chunk.
 import { SignIn } from './screens/SignIn'
-import { ChoosePath } from './screens/ChoosePath'
-import { CreateHousehold } from './screens/CreateHousehold'
-import { JoinHousehold } from './screens/JoinHousehold'
-import { InviteMember } from './screens/InviteMember'
-import { Dashboard } from './screens/Dashboard'
-import { ConsentScreen } from './screens/ConsentScreen'
-import { ProfileSetup } from './screens/ProfileSetup'
 import { OfflineBanner } from './components/OfflineBanner'
+const ChoosePath = lazy(() => import('./screens/ChoosePath').then(m => ({ default: m.ChoosePath })))
+const CreateHousehold = lazy(() => import('./screens/CreateHousehold').then(m => ({ default: m.CreateHousehold })))
+const JoinHousehold = lazy(() => import('./screens/JoinHousehold').then(m => ({ default: m.JoinHousehold })))
+const InviteMember = lazy(() => import('./screens/InviteMember').then(m => ({ default: m.InviteMember })))
+const Dashboard = lazy(() => import('./screens/Dashboard').then(m => ({ default: m.Dashboard })))
+const ConsentScreen = lazy(() => import('./screens/ConsentScreen').then(m => ({ default: m.ConsentScreen })))
+const ProfileSetup = lazy(() => import('./screens/ProfileSetup').then(m => ({ default: m.ProfileSetup })))
 import './App.css'
 
 type AppState =
@@ -370,7 +375,19 @@ function App() {
           >×</button>
         </div>
       )}
-      {renderScreen()}
+      {/* AK-165 — Single Suspense boundary for all lazy post-auth screens.
+          Fallback mirrors the existing 'loading' state render so the spinner
+          shape is consistent across initial app boot and inter-screen
+          transitions. SignIn (eager) never triggers this fallback. */}
+      <Suspense
+        fallback={
+          <div className="app-loading" aria-label="Loading">
+            <div className="loading-spinner" role="status" />
+          </div>
+        }
+      >
+        {renderScreen()}
+      </Suspense>
     </>
   )
 }

@@ -13,8 +13,12 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
-import { getStorage } from 'firebase/storage';
-import { getMessaging, getToken, onMessage } from 'firebase/messaging';
+// AK-165 — @firebase/storage and @firebase/messaging are no longer top-level
+// value imports. They're dynamically imported on first use via the lazy
+// getters below, so neither SDK ends up in the entry chunk. Type-only
+// imports stay; they're erased at build time.
+import type { FirebaseStorage } from 'firebase/storage';
+import type { Messaging } from 'firebase/messaging';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -59,8 +63,45 @@ export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
 });
 export const functions = getFunctions(app, 'asia-south1');
-export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// AK-165 — Lazy storage. Memoized; the @firebase/storage SDK is fetched on
+// first call to getStorageInstance() rather than at module load. No client
+// code uses Storage today (audited at AK-165 time); the getter is in place
+// for future uploads (prescription scans, etc.) without paying the bytes now.
+let _storage: FirebaseStorage | null = null;
+export async function getStorageInstance(): Promise<FirebaseStorage> {
+  if (_storage) return _storage;
+  const { getStorage } = await import('firebase/storage');
+  _storage = getStorage(app);
+  return _storage;
+}
+
+// AK-165 — Lazy messaging. The @firebase/messaging SDK is fetched on first
+// use (typically from requestNotificationPermission, after auth resolves).
+// Idempotent: returns null on subsequent calls when init failed once.
+let _messaging: Messaging | null = null;
+let _messagingInitTried = false;
+export async function ensureMessaging(): Promise<Messaging | null> {
+  if (_messagingInitTried) return _messaging;
+  _messagingInitTried = true;
+  try {
+    const { getMessaging, onMessage } = await import('firebase/messaging');
+    _messaging = getMessaging(app);
+    // AK-172 — Foreground push handler. Previously attached eagerly at module
+    // load; now attaches once on first messaging init. Re-broadcasts dose
+    // reminders as a CustomEvent so App.tsx can render its banner without
+    // pulling React into this module.
+    onMessage(_messaging, (payload) => {
+      if (payload.data?.type === 'dose_reminder') {
+        window.dispatchEvent(new CustomEvent('foreground-dose-reminder', { detail: payload }));
+      }
+    });
+  } catch {
+    _messaging = null;
+  }
+  return _messaging;
+}
 
 if (import.meta.env.DEV) {
   // Must be set BEFORE connectAuthEmulator. Tells the Auth SDK to skip both
@@ -75,43 +116,24 @@ if (import.meta.env.DEV) {
 }
 
 
-// getMessaging throws in environments that don't support the Push API (e.g. iOS webview without entitlement)
-export const messaging = (() => {
-  try {
-    return getMessaging(app);
-  } catch {
-    return null;
-  }
-})();
-
-// AK-172 — foreground push handler. The SW only fires onBackgroundMessage when
-// the page is hidden; when the app is open in the foreground FCM delivers a
-// silent message to onMessage and expects the app to render its own UI. We
-// re-broadcast as a CustomEvent so App.tsx can surface a banner without this
-// module needing a React dependency.
-if (messaging) {
-  onMessage(messaging, (payload) => {
-    if (payload.data?.type === 'dose_reminder') {
-      window.dispatchEvent(new CustomEvent('foreground-dose-reminder', { detail: payload }));
-    }
-  });
-}
-
 // ─── FCM token registration (MC-006) ────────────────────────────────────────
 // Asks the browser/device for notification permission, requests a per-install
 // FCM registration token, and persists it on users/{uid}.fcmToken so Cloud
 // Functions can target this user. No-ops gracefully when:
 //   • the browser denies permission
 //   • the runtime has no Push API (older iOS WKWebViews, Capacitor without
-//     the FCM plugin) — `messaging` is null in that case
+//     the FCM plugin) — ensureMessaging() resolves to null in that case
 //   • the VAPID key env var isn't configured (e.g. local dev)
 //
 // Safe to call repeatedly; getToken returns a stable token until the user
 // clears site data or revokes permission, and updateDoc with the same value
 // is a no-op write.
+//
+// AK-165 — Body now lazy-imports @firebase/messaging via ensureMessaging() +
+// a second dynamic import for getToken. The module is cached after the first
+// dynamic import, so the second await is effectively free.
 export async function requestNotificationPermission(uid: string): Promise<void> {
-  if (!messaging) return;
-  const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+  const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined;
   if (!vapidKey) return;
 
   // Guard against environments where Notification isn't a constructor (some
@@ -122,7 +144,11 @@ export async function requestNotificationPermission(uid: string): Promise<void> 
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') return;
 
-    const token = await getToken(messaging, { vapidKey });
+    const m = await ensureMessaging();
+    if (!m) return;
+
+    const { getToken } = await import('firebase/messaging');
+    const token = await getToken(m, { vapidKey });
     if (!token) return;
 
     await updateDoc(doc(db, 'users', uid), { fcmToken: token });
