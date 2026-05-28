@@ -64,3 +64,24 @@ export function getSkipUrgency(id: string | null | undefined): SkipUrgencyTier {
   if (!id) return 'benign'
   return SKIP_URGENCY[id] ?? 'benign'
 }
+
+// AK-NNN — Reasons that streak-track. Three consecutive skips with the same
+// reason on the same treatment trigger a "3 days running" caregiver alert. The
+// set mirrors the AK-155 clinical tier — symptom/improvement signals where a
+// repeated pattern warrants a check-in beyond the per-log push. Preventive-
+// category treatments also streak-track on benign reasons (handled at the
+// call site), so this list is the *reason*-axis of eligibility only.
+//
+// Typed as string[] (not SkipReasonId[]) because the functions package
+// compiles standalone and can't import the client type union. Values stay in
+// sync with src/lib/skipReasons.ts manually.
+const STREAK_TRACKED_REASONS: string[] = [
+  'side_effects',
+  'adverse_reaction',
+  'blood_sugar_low',
+  'feeling_better',
+]
+
+export function isStreakTrackedReason(id: string | null | undefined): boolean {
+  return !!id && STREAK_TRACKED_REASONS.includes(id)
+}

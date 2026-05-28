@@ -319,6 +319,13 @@ export interface Treatment {
   // Append-only pause/resume audit. Most recent entry's resumedAt is null
   // while the treatment is paused; resumeTreatment() fills it on resume.
   pauseHistory?: PauseEntry[]
+  // Streak-alert dedup marker. Stamped by notifyCaregiverOnLog when a 3-in-a-row
+  // same-reason skip streak fires its alert; carries the slotId of the trigger
+  // log. The next clinical-skip on the same treatment short-circuits if this
+  // slotId still appears in the latest-3 window (i.e. the streak hasn't broken
+  // and we already alerted). A new streak (with a fresh 3-log window not
+  // containing this slotId) re-arms the alert. Absent on unalerted treatments.
+  streakAlertedAtSlotId?: string | null
 }
 
 export interface Regimen {

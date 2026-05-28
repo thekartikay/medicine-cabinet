@@ -16,7 +16,7 @@ import {
   previousDateInTz,
 } from './util/tzDate'
 import { ENFORCE_APP_CHECK } from './util/enforceAppCheck'
-import { SKIP_REASON_LABELS, getSkipUrgency } from './skipReasons'
+import { SKIP_REASON_LABELS, getSkipUrgency, isStreakTrackedReason } from './skipReasons'
 
 // MC-004 — Gemini API proxy. Re-exported so deploy picks it up.
 export { geminiProxy } from './geminiProxy'
@@ -1764,6 +1764,101 @@ async function zeroCabinetItemStock(
 // onLogWritten; the guard below sees the (truthy) timestamp and returns, so we
 // never double-send or loop. PRN skips and taken/missed/pending writes never
 // reach the send path. Best-effort: a failed push must not throw.
+// AK-NNN — Shared recipient resolution + FCM fan-out. Extracted so the
+// existing per-log path and the new streak-alert path share one admin
+// fan-out implementation and one admin-own-dose exclusion rule (AK-154
+// follow-up). Returns attempted=false when there are no recipients (sole
+// admin logging their own dose), so the caller can choose whether to stamp
+// caregiverNotifiedAt — the per-log path skips the stamp in that case; the
+// streak path stamps regardless to guarantee a single fire per streak.
+async function sendCaregiverPush(
+  hId: string,
+  patientId: string,
+  createdBy: string | undefined,
+  payload: {
+    title: string
+    body: string
+    highPriority: boolean
+    dataType: string
+    slotId: string
+  },
+): Promise<{ attempted: boolean; sent: number }> {
+  const hSnap = await db.doc(`households/${hId}`).get()
+  const household = hSnap.data() as
+    { adminIds?: string[]; primaryAdminId?: string } | undefined
+  const adminIds = household?.adminIds ?? []
+  const primaryAdminId = household?.primaryAdminId
+
+  const isAdminLoggingOwnDose =
+    !!primaryAdminId && patientId === primaryAdminId && createdBy === patientId
+  const recipientIds = isAdminLoggingOwnDose
+    ? adminIds.filter(uid => uid !== patientId)
+    : adminIds
+
+  if (recipientIds.length === 0) {
+    if (isAdminLoggingOwnDose) {
+      console.warn(
+        `sendCaregiverPush: ${hId} — admin logged own dose but has no co-admin to notify`,
+      )
+    }
+    return { attempted: false, sent: 0 }
+  }
+
+  let sent = 0
+  for (const adminId of recipientIds) {
+    const adminSnap = await db.doc(`users/${adminId}`).get()
+    const adminData = adminSnap.data()
+    if (!adminData?.fcmToken) continue
+    if (adminData.pushNotificationsEnabled === false) continue
+    try {
+      await messaging.send({
+        token: adminData.fcmToken as string,
+        notification: { title: payload.title, body: payload.body },
+        data: {
+          type: payload.dataType,
+          householdId: hId,
+          patientId,
+          slotId: payload.slotId,
+        },
+        android: {
+          priority: payload.highPriority ? 'high' : 'normal',
+          notification: {
+            channelId: 'dose_reminders',
+            color: '#5DC1C8',
+            icon: 'ic_notification',
+          },
+        },
+        apns: {
+          headers: { 'apns-priority': payload.highPriority ? '10' : '5' },
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+              mutableContent: true,
+              'interruption-level': payload.highPriority ? 'critical' : 'active',
+            },
+          },
+        },
+      })
+      sent++
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code
+      if (code === 'messaging/registration-token-not-registered') {
+        await db.doc(`users/${adminId}`).update({ fcmToken: FieldValue.delete() })
+      }
+      // Otherwise swallow — one bad token shouldn't block the rest.
+    }
+  }
+
+  if (isAdminLoggingOwnDose && sent === 0) {
+    console.warn(
+      `sendCaregiverPush: ${hId} — admin logged own dose but no co-admin has a registered FCM token`,
+    )
+  }
+
+  return { attempted: true, sent }
+}
+
 async function notifyCaregiverOnLog(
   hId: string,
   tId: string,
@@ -1779,7 +1874,9 @@ async function notifyCaregiverOnLog(
   if (!patientId) return
 
   const tSnap = await db.doc(`households/${hId}/treatments/${tId}`).get()
-  const treatment = tSnap.data() as { category?: string; memberName?: string } | undefined
+  const treatment = tSnap.data() as
+    { category?: string; memberName?: string; streakAlertedAtSlotId?: string | null }
+    | undefined
   const category = treatment?.category
   const patientName = treatment?.memberName?.trim() || 'A family member'
 
@@ -1795,6 +1892,79 @@ async function notifyCaregiverOnLog(
     if (dn && dn.trim()) medicineName = dn.trim()
   }
 
+  const createdBy = after.createdBy as string | undefined
+
+  // ─── AK-NNN — Streak alert (3 consecutive same-reason skips) ──────────────
+  // Runs BEFORE the per-log benign bail so preventive-category benign streaks
+  // (e.g. 3× "feeling_better" — improvement-driven) still alert. PRN already
+  // bailed above; 'late' status doesn't streak-track. Best-effort: pre-fire
+  // failures fall through to the per-log path so a streak-check bug can't
+  // suppress the normal caregiver push.
+  if (status === 'skipped') {
+    const reasonIdForStreak = (after.skipReason as string | null | undefined) ?? null
+    const streakEligible = isStreakTrackedReason(reasonIdForStreak) || category === 'preventive'
+    if (streakEligible && reasonIdForStreak) {
+      let streakCommitted = false
+      try {
+        const logsSnap = await db
+          .collection(`households/${hId}/treatments/${tId}/logs`)
+          .orderBy('scheduledAt', 'desc')
+          .limit(3)
+          .get()
+        const last3 = logsSnap.docs.map(d => ({
+          slotId: d.id,
+          status: d.get('status') as string | undefined,
+          skipReason: d.get('skipReason') as string | null | undefined,
+        }))
+        const isStreak =
+          last3.length === 3
+          && last3.every(l => l.status === 'skipped')
+          && last3.every(l => l.skipReason === reasonIdForStreak)
+        const alreadyAlerted =
+          treatment?.streakAlertedAtSlotId != null
+          && last3.some(l => l.slotId === treatment.streakAlertedAtSlotId)
+
+        if (isStreak && !alreadyAlerted) {
+          streakCommitted = true
+          const streakClinical = isStreakTrackedReason(reasonIdForStreak)
+          const reasonLabel = SKIP_REASON_LABELS[reasonIdForStreak] ?? null
+          const streakTitle = streakClinical
+            ? `⚠️ ${patientName} skipping ${medicineName} · 3 days running`
+            : `${patientName} skipping ${medicineName} · 3 days running`
+          const streakBody = `${reasonLabel ?? 'Dose skipped'} — may be worth a call`
+
+          await sendCaregiverPush(hId, patientId, createdBy, {
+            title: streakTitle,
+            body: streakBody,
+            highPriority: streakClinical,
+            dataType: 'streak_alert',
+            slotId,
+          })
+
+          // Stamp BOTH markers regardless of send outcome. Treatment-level
+          // marker dedups future streaks while this 3-log window is still
+          // alive; log-level stamp prevents re-trigger from re-running this
+          // function. The streak alert supersedes the per-log FCM for this
+          // write — we return below without falling through.
+          await db.doc(`households/${hId}/treatments/${tId}`).update({
+            streakAlertedAtSlotId: slotId,
+          })
+          await db
+            .doc(`households/${hId}/treatments/${tId}/logs/${slotId}`)
+            .update({ caregiverNotifiedAt: Timestamp.now() })
+        }
+      } catch (err: unknown) {
+        // Pre-fire failures (streakCommitted=false) fall through to per-log;
+        // post-fire failures short-circuit below so we don't double-send.
+        console.warn(
+          `notifyCaregiverOnLog: ${hId}/${tId} — streak check failed: ${String(err)}`,
+        )
+      }
+      if (streakCommitted) return
+    }
+  }
+
+  // ─── AK-155 — Per-log tier routing ────────────────────────────────────────
   let title: string
   let body: string
   let highPriority = false
@@ -1804,7 +1974,7 @@ async function notifyCaregiverOnLog(
     title = `${patientName} logged a late dose`
     body = `${medicineName} — taken at ${when}.`
   } else {
-    // AK-155 — three-tier routing by skip-reason urgency.
+    // Three-tier routing by skip-reason urgency.
     const reasonId = (after.skipReason as string | null | undefined) ?? null
     const reasonLabel = reasonId ? (SKIP_REASON_LABELS[reasonId] ?? null) : null
     const tier = getSkipUrgency(reasonId)
@@ -1829,90 +1999,22 @@ async function notifyCaregiverOnLog(
       }
     }
 
-    // AK-155 Step 3 — "ran out" / "inhaler empty" zeroes the cabinet item's
-    // stock so the existing low-stock alert pipeline (onCabinetItemWritten →
-    // stockAlerts) picks it up. Best-effort: a failure must not block the FCM.
+    // "ran out" / "inhaler empty" zeroes the cabinet item's stock so the
+    // existing low-stock alert pipeline picks it up. Best-effort.
     if (reasonId === 'ran_out' || reasonId === 'inhaler_empty') {
       await zeroCabinetItemStock(hId, after.cabinetItemId as string | undefined)
     }
   }
 
-  const hSnap = await db.doc(`households/${hId}`).get()
-  const household = hSnap.data() as
-    { adminIds?: string[]; primaryAdminId?: string } | undefined
-  const adminIds = household?.adminIds ?? []
-  const primaryAdminId = household?.primaryAdminId
-  const createdBy = after.createdBy as string | undefined
   const dataType = status === 'late' ? 'late_dose' : 'dose_skipped'
-
-  // AK-154 follow-up — when the primary admin logs (or skips) their OWN dose,
-  // don't push a notification back at themselves; route to every OTHER admin
-  // instead. All other logs (members, co-admins acting on a member) notify the
-  // full admin set as before.
-  const isAdminLoggingOwnDose =
-    !!primaryAdminId && patientId === primaryAdminId && createdBy === patientId
-  const recipientIds = isAdminLoggingOwnDose
-    ? adminIds.filter(uid => uid !== patientId)
-    : adminIds
-
-  if (recipientIds.length === 0) {
-    // Admin logged their own dose and is the sole admin — no one to notify.
-    if (isAdminLoggingOwnDose) {
-      console.warn(
-        `notifyCaregiverOnLog: ${hId} — admin logged own dose but has no co-admin to notify`,
-      )
-    }
-    return
-  }
-
-  let sent = 0
-  for (const adminId of recipientIds) {
-    const adminSnap = await db.doc(`users/${adminId}`).get()
-    const adminData = adminSnap.data()
-    if (!adminData?.fcmToken) continue
-    if (adminData.pushNotificationsEnabled === false) continue
-    try {
-      await messaging.send({
-        token: adminData.fcmToken as string,
-        notification: { title, body },
-        data: { type: dataType, householdId: hId, patientId, slotId },
-        android: {
-          priority: highPriority ? 'high' : 'normal',
-          notification: {
-            channelId: 'dose_reminders',
-            color: '#5DC1C8',
-            icon: 'ic_notification',
-          },
-        },
-        apns: {
-          headers: { 'apns-priority': highPriority ? '10' : '5' },
-          payload: {
-            aps: {
-              sound: 'default',
-              badge: 1,
-              mutableContent: true,
-              'interruption-level': highPriority ? 'critical' : 'active',
-            },
-          },
-        },
-      })
-      sent++
-    } catch (err: unknown) {
-      const code = (err as { code?: string })?.code
-      if (code === 'messaging/registration-token-not-registered') {
-        await db.doc(`users/${adminId}`).update({ fcmToken: FieldValue.delete() })
-      }
-      // Otherwise swallow — one bad token shouldn't block the rest.
-    }
-  }
-
-  // AK-154 follow-up — co-admin(s) exist but none had a registered FCM token.
-  // Surface it for diagnostics; still return cleanly (never throw).
-  if (isAdminLoggingOwnDose && sent === 0) {
-    console.warn(
-      `notifyCaregiverOnLog: ${hId} — admin logged own dose but no co-admin has a registered FCM token`,
-    )
-  }
+  const { attempted } = await sendCaregiverPush(hId, patientId, createdBy, {
+    title,
+    body,
+    highPriority,
+    dataType,
+    slotId,
+  })
+  if (!attempted) return
 
   // Stamp so the re-triggered onLogWritten bails at the guard above. Done even
   // with no tokens so this log's notification is never reprocessed.
