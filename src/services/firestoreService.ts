@@ -26,6 +26,7 @@ import {
   memberPath,
   cabinetPath,
   itemPath,
+  itemEventPath,
   itemsCollectionPath,
   treatmentPath,
   regimenPath,
@@ -67,6 +68,7 @@ import type {
   RestockRequest,
   ScheduleType,
   SkipReasonId,
+  StockSource,
   TimeSlot,
   TodaySummary,
   Treatment,
@@ -293,6 +295,86 @@ export async function disposeCabinetItem(
 ): Promise<void> {
   await updateDoc(doc(db, itemPath(hId, cId, iId)), {
     disposedAt: serverTimestamp(),
+  })
+}
+
+// AK-174 — Increment a cabinet item's quantityOnHand and write a matching
+// append-only event row at items/{iId}/events/{eventId}, in one transaction.
+//
+// Why a transaction (not updateDoc): read-modify-write on a counter must be
+// race-safe against concurrent dose debits (logDose). Mirrors the shape of
+// logDose's debit and the zeroCabinetItemStock Cloud Function helper.
+//
+// Why the event doc: the source of an increment (manual_add / future API
+// delivery / seed) is auditable history. The item doc holds state; events
+// hold the trail. Both writes are atomic — if either fails, both roll back.
+//
+// The item update touches only `quantityOnHand` + `updatedAt`, which keeps it
+// within the existing member rule allowlist (onlyChanges(...)) — no rule
+// widening required. Expiry from the add-stock modal lives on the event row,
+// not on the item (beta simplification; multi-batch expiry is its own ticket).
+export async function addStock(
+  hId: string,
+  cId: string,
+  iId: string,
+  args: {
+    amount: number
+    source: StockSource
+    actorUid: string
+    actorRole: 'admin' | 'member'
+    batchNumber?: string | null
+    expiryDate?: string | null
+    notes?: string | null
+  },
+): Promise<void> {
+  if (!(args.amount > 0)) {
+    throw new Error('Stock amount must be greater than zero.')
+  }
+  // Defensive clamp — UI also limits to 200 chars, but a runtime guard keeps
+  // the event row predictable regardless of caller.
+  const notesClamped = args.notes ? args.notes.slice(0, 200) : null
+  const eventId = crypto.randomUUID()
+
+  await runTransaction(db, async tx => {
+    const itemRef = doc(db, itemPath(hId, cId, iId))
+    const itemSnap = await tx.get(itemRef)
+    if (!itemSnap.exists()) {
+      throw new Error('Cabinet item not found.')
+    }
+    const item = itemSnap.data() as CabinetItem
+    if (item.disposedAt) {
+      throw new Error('Cannot add stock to a deleted medicine.')
+    }
+
+    const quantityBefore = item.quantityOnHand
+    const quantityAfter = quantityBefore + args.amount
+
+    // Item update — stays within the member rules allowlist
+    // (firestore.rules onlyChanges(['quantityOnHand', 'updatedAt'])).
+    tx.update(itemRef, {
+      quantityOnHand: quantityAfter,
+      updatedAt: serverTimestamp(),
+    })
+
+    // Append-only event row capturing the source + delta + before/after.
+    const eventRef = doc(db, itemEventPath(hId, cId, iId, eventId))
+    tx.set(eventRef, {
+      eventId,
+      iId,
+      cId,
+      hId,
+      type: 'increment' as const,
+      delta: args.amount,
+      source: args.source,
+      quantityBefore,
+      quantityAfter,
+      actorUid: args.actorUid,
+      actorRole: args.actorRole,
+      batchNumber: args.batchNumber ?? null,
+      expiryDate: args.expiryDate ?? null,
+      notes: notesClamped,
+      at: serverTimestamp(),
+    })
   })
 }
 

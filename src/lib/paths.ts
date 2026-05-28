@@ -19,6 +19,11 @@ export const memberPath = (hId: string, uid: string) => `households/${hId}/membe
 export const cabinetPath = (hId: string, cId: string) => `households/${hId}/cabinets/${cId}`
 export const itemPath = (hId: string, cId: string, iId: string) =>
   `households/${hId}/cabinets/${cId}/items/${iId}`
+// AK-174 — append-only stock-increment event log scoped to one cabinet item.
+export const itemEventsCollectionPath = (hId: string, cId: string, iId: string) =>
+  `${itemPath(hId, cId, iId)}/events`
+export const itemEventPath = (hId: string, cId: string, iId: string, eventId: string) =>
+  `${itemEventsCollectionPath(hId, cId, iId)}/${eventId}`
 export const treatmentPath = (hId: string, tId: string) => `households/${hId}/treatments/${tId}`
 export const regimenPath = (hId: string, tId: string, rId: string) =>
   `households/${hId}/treatments/${tId}/regimens/${rId}`

@@ -14,6 +14,7 @@ import {
   getActiveTreatmentsWithRegimensForMember,
   deleteCabinetItem,
   disposeCabinetItem,
+  addStock,
 } from '../services/firestoreService'
 import { checkCabinetInteractions } from '../services/geminiService'
 import { TreatmentInteractionWarningModal } from '../components/TreatmentInteractionWarningModal'
@@ -39,6 +40,13 @@ interface Props {
   // the medicines used in this user's treatments only.
   readOnly?: boolean
   filterByPatientUid?: string
+  // AK-174 — Actor context for the new Add stock event log. Cabinet's existing
+  // mutations didn't need a uid (rules enforce by claim, not by data field);
+  // the stock-event row records who performed the increment, so we surface
+  // the current user explicitly. Caregivers don't reach this screen
+  // (isParticipant excludes them), so the role narrows to admin | member.
+  currentUid: string
+  currentRole: 'admin' | 'member'
 }
 
 // AK-149 — Used both for the masterStillMatches save-time check (originally
@@ -164,7 +172,7 @@ function byExpirySoonest(a: CabinetItem, b: CabinetItem): number {
   return daysUntilExpiry(a) - daysUntilExpiry(b)
 }
 
-export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props) {
+export function CabinetTab({ hId, readOnly = false, filterByPatientUid, currentUid, currentRole }: Props) {
   const [view, setView] = useState<CabinetView>('list')
   const [cId, setCId] = useState<string | null>(null)
   const [items, setItems] = useState<CabinetItem[]>([])
@@ -246,6 +254,19 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
   const [disposingItems, setDisposingItems] = useState<CabinetItem[] | null>(null)
   const [disposeAffected, setDisposeAffected] = useState<Treatment[]>([])
   const [disposeLoading, setDisposeLoading] = useState(false)
+
+  // AK-174 — Add stock modal. Targets one cabinet item (group.items[0] for
+  // single-batch groups, the canonical batch for multi-batch). Free-text
+  // form state with inline validation; a brief toast confirms success and
+  // the existing subscribeCabinetItems listener picks up the new quantity.
+  const [addStockTarget, setAddStockTarget] = useState<CabinetItem | null>(null)
+  const [addStockQty, setAddStockQty] = useState('')
+  const [addStockExpiry, setAddStockExpiry] = useState('')
+  const [addStockBatch, setAddStockBatch] = useState('')
+  const [addStockNotes, setAddStockNotes] = useState('')
+  const [addStockLoading, setAddStockLoading] = useState(false)
+  const [addStockError, setAddStockError] = useState('')
+  const [addStockToast, setAddStockToast] = useState<string | null>(null)
 
   // ── Read-only filter set: cabinetItem ids used in this user's treatments ──
   const [allowedItemIds, setAllowedItemIds] = useState<Set<string> | null>(null)
@@ -560,6 +581,52 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
       // deferred — disposeCabinetItem failures here are rare (single
       // updateDoc with App Check) and the modal stays in a sensible
       // retry-or-cancel state.
+    }
+  }
+
+  // AK-174 — Add stock handlers. openAddStock resets prior form state so a
+  // re-open after a previous save doesn't surface stale values; confirmAddStock
+  // delegates validation + the transaction to firestoreService.addStock.
+  function openAddStock(item: CabinetItem) {
+    setAddStockTarget(item)
+    setAddStockQty('')
+    setAddStockExpiry('')
+    setAddStockBatch('')
+    setAddStockNotes('')
+    setAddStockError('')
+  }
+
+  function cancelAddStock() {
+    setAddStockTarget(null)
+    setAddStockError('')
+  }
+
+  async function confirmAddStock() {
+    if (!addStockTarget || !cId) return
+    const qty = parseFloat(addStockQty)
+    if (isNaN(qty) || qty <= 0) {
+      setAddStockError('Enter a quantity greater than zero.')
+      return
+    }
+    setAddStockError('')
+    setAddStockLoading(true)
+    try {
+      await addStock(hId, cId, addStockTarget.iId, {
+        amount: qty,
+        source: 'manual_add',
+        actorUid: currentUid,
+        actorRole: currentRole,
+        batchNumber: addStockBatch.trim() || null,
+        expiryDate: addStockExpiry || null,
+        notes: addStockNotes.trim() || null,
+      })
+      setAddStockTarget(null)
+      setAddStockToast('Stock added.')
+      setTimeout(() => setAddStockToast(null), 2400)
+    } catch (err) {
+      setAddStockError(err instanceof Error ? err.message : 'Could not add stock. Please try again.')
+    } finally {
+      setAddStockLoading(false)
     }
   }
 
@@ -1457,6 +1524,17 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
                 </button>
               )
             })()}
+            {/* AK-174: Add stock — inventory management, separate from the refill decision.
+                When Request Refill (AK-162) lands, it takes primary weight; Add stock stays secondary. */}
+            {!readOnly && (
+              <button
+                type="button"
+                className="bs-btn bs-btn--secondary"
+                onClick={() => openAddStock(group.items[0])}
+              >
+                Add stock
+              </button>
+            )}
             {!readOnly && (
               // AK-150 — Medicine-level (group-level) soft delete. Disposes
               // every batch in the group. Works for both single-batch and
@@ -1523,6 +1601,113 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
                   </button>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* AK-174 — Add stock modal. Mirrors the dispose modal's bs-overlay /
+              bs-sheet shape and the edit view's cb-field / cb-input form
+              styling. Atomic write goes through addStock (item update + event
+              row in one transaction). No source-asking copy per ticket. */}
+          {addStockTarget && (() => {
+            const qtyNum = parseFloat(addStockQty)
+            const qtyValid = !isNaN(qtyNum) && qtyNum > 0
+            return (
+              <div
+                className="bs-overlay"
+                onClick={addStockLoading ? undefined : cancelAddStock}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="add-stock-title"
+              >
+                <div className="bs-sheet" onClick={(e) => e.stopPropagation()}>
+                  <span className="bs-handle" aria-hidden="true" />
+                  <h2 id="add-stock-title" className="bs-title">Add stock</h2>
+                  <p className="bs-meta-line">
+                    Update your cabinet count when you get medicine from anywhere.
+                  </p>
+
+                  <div className="cb-form" style={{ marginTop: 12 }}>
+                    <div className="cb-field">
+                      <label className="cb-label" htmlFor="as-qty">Quantity</label>
+                      <input
+                        id="as-qty"
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        step="any"
+                        className="cb-input"
+                        value={addStockQty}
+                        onChange={(e) => setAddStockQty(e.target.value)}
+                        autoFocus
+                      />
+                    </div>
+                    <div className="cb-field">
+                      <label className="cb-label" htmlFor="as-exp">Expiry date</label>
+                      <input
+                        id="as-exp"
+                        type="date"
+                        className="cb-input"
+                        value={addStockExpiry}
+                        onChange={(e) => setAddStockExpiry(e.target.value)}
+                      />
+                    </div>
+                    <div className="cb-field">
+                      <label className="cb-label" htmlFor="as-batch">Batch number</label>
+                      <input
+                        id="as-batch"
+                        type="text"
+                        className="cb-input"
+                        value={addStockBatch}
+                        onChange={(e) => setAddStockBatch(e.target.value)}
+                      />
+                    </div>
+                    <div className="cb-field">
+                      <label className="cb-label" htmlFor="as-notes">Notes</label>
+                      <input
+                        id="as-notes"
+                        type="text"
+                        maxLength={200}
+                        className="cb-input"
+                        value={addStockNotes}
+                        onChange={(e) => setAddStockNotes(e.target.value)}
+                      />
+                      <p className="cb-hint" style={{ marginTop: 4 }}>
+                        {addStockNotes.length} / 200
+                      </p>
+                    </div>
+                    {addStockError && (
+                      <p className="cb-form-error" role="alert">{addStockError}</p>
+                    )}
+                  </div>
+
+                  <div className="bs-actions" style={{ marginTop: 16 }}>
+                    <button
+                      type="button"
+                      className="bs-btn bs-btn--secondary"
+                      onClick={cancelAddStock}
+                      disabled={addStockLoading}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="bs-btn bs-btn--primary"
+                      onClick={confirmAddStock}
+                      disabled={!qtyValid || addStockLoading}
+                    >
+                      {addStockLoading ? 'Adding…' : 'Add stock'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* AK-174 — Success toast. Fades after 2.4s via the timer in
+              confirmAddStock. Same .db-toast styling used elsewhere. */}
+          {addStockToast && (
+            <div className="db-toast" role="status" aria-live="polite">
+              {addStockToast}
             </div>
           )}
         </div>

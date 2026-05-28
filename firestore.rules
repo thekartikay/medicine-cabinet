@@ -253,6 +253,17 @@ service cloud.firestore {
           allow update: if isAdmin(hId)
                          || (isMember(hId)
                              && onlyChanges(['quantityOnHand', 'updatedAt']));
+
+          // ── /households/{hId}/cabinets/{cId}/items/{iId}/events/{eventId} ─
+          // AK-174 — append-only stock-event log. Written from addStock inside
+          // the same transaction as the item update (atomic state + audit).
+          // Update/delete denied — the row is immutable history. Caregiver
+          // writes are deferred; caregivers are not isParticipant here.
+          match /events/{eventId} {
+            allow read:   if isParticipant(hId);
+            allow create: if isAdmin(hId) || isMember(hId);
+            allow update, delete: if false;
+          }
         }
       }
 

@@ -1482,6 +1482,8 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
               hId={household.hId}
               readOnly={role === 'member'}
               filterByPatientUid={role === 'member' ? user.uid : undefined}
+              currentUid={user.uid}
+              currentRole={role === 'admin' ? 'admin' : 'member'}
             />
           </div>
         )}

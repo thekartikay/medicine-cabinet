@@ -232,6 +232,35 @@ export interface CabinetItem {
   disposedAt?: Timestamp | null
 }
 
+// AK-174 — Source of a stock-increment event. 'manual_add' covers the new
+// admin-side Add stock flow; 'api_delivery' is reserved for the future fulfilled-
+// refill webhook; 'initial_seed' lets backfills mark synthetic events without
+// being confused with real human actions.
+export type StockSource = 'api_delivery' | 'manual_add' | 'initial_seed'
+
+// AK-174 — Append-only audit row for any quantityOnHand change on a CabinetItem.
+// Lives at households/{hId}/cabinets/{cId}/items/{iId}/events/{eventId} with an
+// explicit (client-generated UUID) doc id. Written inside the same transaction
+// as the item update so the item state and the event row never diverge. Rules
+// allow create for admin or member; update/delete denied (immutable ledger).
+export interface CabinetItemEvent {
+  eventId: string
+  iId: string
+  cId: string
+  hId: string
+  type: 'increment' | 'debit' | 'zero'
+  delta: number                       // signed: +N for increment, −N for debit, etc.
+  source: StockSource
+  quantityBefore: number
+  quantityAfter: number
+  actorUid: string
+  actorRole: 'admin' | 'member'       // caregiver writes deferred to a later ticket
+  batchNumber?: string | null
+  expiryDate?: string | null          // YYYY-MM-DD, from the add-stock modal
+  notes?: string | null               // clamped to 200 chars by the service layer
+  at: Timestamp
+}
+
 export interface MasterMedicine {
   medicineId: string
   name: string
