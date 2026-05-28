@@ -1434,18 +1434,17 @@ export function CabinetTab({ hId, readOnly = false, filterByPatientUid }: Props)
 
           <div className="bs-actions">
             {!readOnly && (() => {
-              // AK-151 — Edit gating. The bottom sheet shows a group; we can
-              // only edit when the group has a single batch (multi-batch
-              // editing isn't a supported flow yet) AND that batch was
-              // manually added (masterDb-picked items are catalog-locked).
+              // AK-151 + AK-130 — Edit gating. Catalog (masterDb-picked) items
+              // are now editable too; updateCabinetItem's field whitelist
+              // (quantity / expiry / brand / strength / dosage form / unit /
+              // displayNameOverride) is what bounds a safe edit. The only
+              // remaining block is multi-batch groups — those must be edited as
+              // individual batches from the cabinet list.
               const isSingleBatch = group.items.length === 1
-              const isManualAdd = !c.masterDbId
-              const editable = isSingleBatch && isManualAdd
+              const editable = isSingleBatch
               const disabledReason = !isSingleBatch
-                ? 'Multi-batch groups cannot be edited from here.'
-                : !isManualAdd
-                  ? 'Catalog medicines cannot be edited.'
-                  : undefined
+                ? 'Edit not available for batches with multiple items. Edit individual batches from the cabinet list.'
+                : undefined
               return (
                 <button
                   type="button"

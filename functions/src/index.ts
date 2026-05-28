@@ -1428,11 +1428,31 @@ async function buildTodaySummaryForHousehold(
   const summaryRef = db.doc(`households/${hId}/todaySummary/${date}`)
   const dowIST = dayOfWeekForISTDateUTC(date)
 
-  const [treatmentsSnap, membersSnap, cabinetsSnap] = await Promise.all([
+  const [treatmentsSnap, membersSnap, cabinetsSnap, priorSnap] = await Promise.all([
     db.collection(`households/${hId}/treatments`).where('status', '==', 'active').get(),
     db.collection(`households/${hId}/members`).get(),
     db.collection(`households/${hId}/cabinets`).get(),
+    summaryRef.get(),
   ])
+
+  // AK-130 — Snapshot the prior summary so a regimen whose schedule was edited
+  // *today* can carry its today slots forward verbatim (tomorrow-IST guard in
+  // the regimen loop below). This is a full-rebuild-and-overwrite function, so
+  // without carrying forward, the rebuild would replace today's old-schedule
+  // slots with the freshly-edited schedule.
+  const priorDocExisted = priorSnap.exists
+  const priorSlotsByRegimen = new Map<string, Array<[string, TSSlot]>>()
+  if (priorDocExisted) {
+    const priorMembers = (priorSnap.data()?.members ?? {}) as Record<string, { slots?: Record<string, TSSlot> }>
+    for (const m of Object.values(priorMembers)) {
+      for (const [slotId, slot] of Object.entries(m.slots ?? {})) {
+        if (!slot.regimenId) continue
+        const arr = priorSlotsByRegimen.get(slot.regimenId) ?? []
+        arr.push([slotId, slot])
+        priorSlotsByRegimen.set(slot.regimenId, arr)
+      }
+    }
+  }
 
   // Member roster — keyed by uid for lookup of displayName.
   const memberDisplayName = new Map<string, string>()
@@ -1495,11 +1515,39 @@ async function buildTodaySummaryForHousehold(
         slots?: Array<{ time: string; foodTiming?: string }>
         startDate?: string
         endDate?: string | null
+        timezone?: string
+        scheduleChangedAt?: FirebaseFirestore.Timestamp
       }
       const scheduleType = r.scheduleType
       if (scheduleType === 'as-needed') continue
       if (r.startDate && r.startDate > date) continue
       if (r.endDate && r.endDate < date) continue
+
+      // AK-130 — tomorrow-IST guard. If this regimen's schedule changed after
+      // the start of *today* (in the regimen's timezone), freeze today: carry
+      // the pre-edit slots forward from the prior summary and skip generating
+      // the new schedule. On tomorrow's date scheduleChangedAt < startOfToday,
+      // so the new schedule applies normally. Only fixed-time slots are
+      // affected — PRN (as-needed) already `continue`d above and has no slots.
+      {
+        const regTz = r.timezone ?? 'Asia/Kolkata'
+        const changedAt = r.scheduleChangedAt
+        const startOfTodayMs = slotInstant(date, '00:00', regTz).getTime()
+        if (changedAt != null && changedAt.toMillis() > startOfTodayMs && priorDocExisted) {
+          const guardedMember = ensureMember(patientId)
+          for (const [slotId, slot] of priorSlotsByRegimen.get(rId) ?? []) {
+            guardedMember.slots[slotId] = { ...slot }
+            // Keep daysSupply accurate against the carried (old-schedule) doses.
+            if (slot.cabinetItemId && slot.doseAmount > 0) {
+              let perItem = dailyAmountByMemberAndItem.get(patientId)
+              if (!perItem) { perItem = new Map(); dailyAmountByMemberAndItem.set(patientId, perItem) }
+              perItem.set(slot.cabinetItemId, (perItem.get(slot.cabinetItemId) ?? 0) + slot.doseAmount)
+            }
+          }
+          continue
+        }
+      }
+
       if (scheduleType === 'specific-days') {
         if (!r.scheduleDays?.includes(dowIST)) continue
       }

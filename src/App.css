@@ -2394,6 +2394,13 @@
   pointer-events: none;
 }
 
+/* AK-130 — muted info note under the treatment edit sheet's schedule editor. */
+.tr-edit-schedule-note {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 8px 0 0;
+}
+
 /* Action button row */
 .tr-dose-controls {
   display: flex;

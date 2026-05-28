@@ -536,11 +536,21 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
   const [editDoseAmount, setEditDoseAmount] = useState('')
   const [editEndDate, setEditEndDate] = useState('')
   const [editOngoing, setEditOngoing] = useState(true)
+  // AK-130 — schedule-editor state for the edit sheet. Mirrors the wizard's
+  // Step 3 shape (slots / scheduleDays / maxDosesPerDay) but scoped to the
+  // regimen being edited.
+  const [editSlots, setEditSlots] = useState<TimeSlot[]>([])
+  const [editScheduleDays, setEditScheduleDays] = useState<number[]>([])
+  const [editMaxDoses, setEditMaxDoses] = useState(4)
+  const [editSlotErrors, setEditSlotErrors] = useState<Record<number, string>>({})
   const [editOriginal, setEditOriginal] = useState<{
     name: string
     doseAmount: string
     endDate: string
     ongoing: boolean
+    slots: TimeSlot[]
+    scheduleDays: number[]
+    maxDosesPerDay: number
   } | null>(null)
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError] = useState('')
@@ -612,17 +622,27 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     if (regs.length === 0) return  // can't edit a treatment with no regimens
     const firstReg = regs[0]
     const reEnd = firstReg.endDate ?? ''
+    const reSlots = (firstReg.slots ?? []).map(s => ({ ...s }))
+    const reDays = [...(firstReg.scheduleDays ?? [])]
+    const reMax = firstReg.maxDosesPerDay ?? 4
     setEditingTId(t.tId)
     setEditRegimenId(firstReg.rId)
     setEditName(t.name)
     setEditDoseAmount(String(firstReg.doseAmount))
     setEditEndDate(reEnd)
     setEditOngoing(firstReg.ongoing)
+    setEditSlots(reSlots)
+    setEditScheduleDays(reDays)
+    setEditMaxDoses(reMax)
+    setEditSlotErrors({})
     setEditOriginal({
       name: t.name,
       doseAmount: String(firstReg.doseAmount),
       endDate: reEnd,
       ongoing: firstReg.ongoing,
+      slots: reSlots.map(s => ({ ...s })),
+      scheduleDays: [...reDays],
+      maxDosesPerDay: reMax,
     })
     setEditError('')
     setView('edit')
@@ -637,15 +657,25 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     const reg = regs.find(r => r.rId === rId)
     if (!reg) return
     const reEnd = reg.endDate ?? ''
+    const reSlots = (reg.slots ?? []).map(s => ({ ...s }))
+    const reDays = [...(reg.scheduleDays ?? [])]
+    const reMax = reg.maxDosesPerDay ?? 4
     setEditRegimenId(rId)
     setEditDoseAmount(String(reg.doseAmount))
     setEditEndDate(reEnd)
     setEditOngoing(reg.ongoing)
+    setEditSlots(reSlots)
+    setEditScheduleDays(reDays)
+    setEditMaxDoses(reMax)
+    setEditSlotErrors({})
     setEditOriginal(prev => prev ? {
       ...prev,
       doseAmount: String(reg.doseAmount),
       endDate: reEnd,
       ongoing: reg.ongoing,
+      slots: reSlots.map(s => ({ ...s })),
+      scheduleDays: [...reDays],
+      maxDosesPerDay: reMax,
     } : null)
   }
 
@@ -654,6 +684,49 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
     setEditingTId(null)
     setEditError('')
     // selectedTreatmentId stays set → detail sheet reappears underneath.
+  }
+
+  // AK-130 — Edit-sheet schedule helpers. Mirror the wizard's Step 3 slot/day
+  // helpers but operate on editSlots / editScheduleDays so the two flows stay
+  // visually and behaviourally identical.
+  function editAddSlot() {
+    if (editSlots.length >= MAX_SLOTS_PER_DAY) {
+      setEditError(`Maximum of ${MAX_SLOTS_PER_DAY} dose times allowed per day.`)
+      return
+    }
+    const t = nextSlotDefault(editSlots)
+    if (t === null) {
+      setEditError(`Maximum of ${MAX_SLOTS_PER_DAY} dose times allowed per day.`)
+      return
+    }
+    setEditError('')
+    setEditSlots(prev => [...prev, { time: t, foodTiming: 'after' }])
+  }
+  function editRemoveSlot(i: number) {
+    setEditSlots(prev => prev.filter((_, idx) => idx !== i))
+    setEditSlotErrors({})
+  }
+  function editSetSlotTime(i: number, time: string) {
+    const dup = editSlots.some((s, idx) => idx !== i && s.time === time)
+    if (dup) {
+      setEditSlotErrors(prev => ({ ...prev, [i]: 'This time is already used.' }))
+      return
+    }
+    setEditSlotErrors(prev => {
+      if (!(i in prev)) return prev
+      const next = { ...prev }
+      delete next[i]
+      return next
+    })
+    setEditSlots(prev => prev.map((s, idx) => idx === i ? { ...s, time } : s))
+  }
+  function editSetSlotFood(i: number, food: FoodTiming) {
+    setEditSlots(prev => prev.map((s, idx) => idx === i ? { ...s, foodTiming: food } : s))
+  }
+  function editToggleDay(d: number) {
+    setEditScheduleDays(prev =>
+      prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort((a, b) => a - b),
+    )
   }
 
   async function handleEditSave() {
@@ -686,6 +759,30 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
       resolvedEndDate = editEndDate
     }
 
+    // AK-130 — schedule-change detection + validation (mirrors the wizard's
+    // Step 3 rules: ≥1 slot, no duplicate times, ≥1 day for specific-days).
+    const st = reg.scheduleType
+    const isSlotBased = st === 'daily' || st === 'specific-days'
+    const slotsChanged = isSlotBased
+      && JSON.stringify(editSlots) !== JSON.stringify(editOriginal.slots)
+    const daysChanged = st === 'specific-days'
+      && JSON.stringify(editScheduleDays) !== JSON.stringify(editOriginal.scheduleDays)
+    const maxChanged = st === 'as-needed'
+      && editMaxDoses !== editOriginal.maxDosesPerDay
+
+    if (isSlotBased && (slotsChanged || daysChanged)) {
+      if (editSlots.length === 0) {
+        setEditError('Add at least one dose time.'); return
+      }
+      const times = editSlots.map(s => s.time)
+      if (new Set(times).size !== times.length) {
+        setEditError('Two doses can’t be set to the same time.'); return
+      }
+    }
+    if (st === 'specific-days' && (slotsChanged || daysChanged) && editScheduleDays.length === 0) {
+      setEditError('Select at least one day.'); return
+    }
+
     setEditError('')
     setEditSaving(true)
 
@@ -701,6 +798,11 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
       regUpdates.ongoing = editOngoing
       regUpdates.endDate = resolvedEndDate
     }
+    // AK-130 — schedule fields. Their presence makes updateRegimen stamp
+    // scheduleChangedAt, which defers the change to tomorrow (Step 4 guard).
+    if (slotsChanged) regUpdates.slots = editSlots
+    if (daysChanged) regUpdates.scheduleDays = editScheduleDays
+    if (maxChanged) regUpdates.maxDosesPerDay = editMaxDoses
     if (Object.keys(regUpdates).length > 0) {
       promises.push(updateRegimen(hId, editingTId, editRegimenId, regUpdates))
     }
@@ -2044,11 +2146,22 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
 
           // Dirty check — Save only enables when something actually changed.
           const trimmedName = editName.trim()
+          // AK-130 — include schedule edits in the dirty check.
+          const editScheduleType = selectedReg?.scheduleType
+          const editIsSlotBased = editScheduleType === 'daily' || editScheduleType === 'specific-days'
+          const editSlotsDirty = editIsSlotBased
+            && JSON.stringify(editSlots) !== JSON.stringify(editOriginal?.slots ?? [])
+          const editDaysDirty = editScheduleType === 'specific-days'
+            && JSON.stringify(editScheduleDays) !== JSON.stringify(editOriginal?.scheduleDays ?? [])
+          const editMaxDirty = editScheduleType === 'as-needed'
+            && editMaxDoses !== (editOriginal?.maxDosesPerDay ?? 4)
+          const scheduleDirty = editSlotsDirty || editDaysDirty || editMaxDirty
           const hasChanges = editOriginal != null && (
             trimmedName !== editOriginal.name ||
             editDoseAmount !== editOriginal.doseAmount ||
             editEndDate !== editOriginal.endDate ||
-            editOngoing !== editOriginal.ongoing
+            editOngoing !== editOriginal.ongoing ||
+            scheduleDirty
           )
 
           // Past-date informational warning. The validator allows the save;
@@ -2168,6 +2281,139 @@ export function TreatmentsTab({ hId, currentUid, readOnly = false, filterByPatie
                       )}
                     </>
                   )}
+
+                  {/* AK-130 — Schedule editor, keyed on the regimen's schedule
+                      type. Mirrors the wizard's Step 3 UI (native time inputs,
+                      day chips, max-doses input). Changes here defer to
+                      tomorrow via scheduleChangedAt (see the note below). */}
+                  {selectedReg && (() => {
+                    const st = selectedReg.scheduleType
+                    // AK-138 — PRN cap edits apply immediately (no slots to defer);
+                    // all other schedule edits defer to tomorrow via scheduleChangedAt.
+                    const note = (
+                      <p className="tr-edit-schedule-note">
+                        {st === 'as-needed'
+                          ? 'Daily limit changes apply immediately.'
+                          : 'Schedule changes apply starting tomorrow. Today’s reminders won’t change.'}
+                      </p>
+                    )
+
+                    if (st === 'as-needed') {
+                      return (
+                        <div className="cb-field">
+                          <label className="cb-label" htmlFor="tr-edit-maxdoses">Maximum doses per day</label>
+                          <input
+                            id="tr-edit-maxdoses"
+                            type="number"
+                            inputMode="numeric"
+                            min={1}
+                            max={10}
+                            className="cb-input"
+                            value={editMaxDoses}
+                            onChange={e => {
+                              const n = parseInt(e.target.value, 10)
+                              if (!isNaN(n)) setEditMaxDoses(Math.max(1, Math.min(10, n)))
+                            }}
+                          />
+                          {note}
+                        </div>
+                      )
+                    }
+
+                    if (st === 'flexible-daily') {
+                      return (
+                        <div className="cb-field">
+                          <span className="cb-label">Schedule</span>
+                          <p className="cb-hint">
+                            Once a day, any time — a reminder goes out at 9 AM. This
+                            schedule isn’t editable here.
+                          </p>
+                        </div>
+                      )
+                    }
+
+                    // daily / specific-days → editable slots (+ day chips).
+                    return (
+                      <>
+                        {st === 'specific-days' && (
+                          <div className="cb-field">
+                            <span className="cb-label">Which days?</span>
+                            <div className="tr-day-grid">
+                              {DAY_LABELS.map((label, dow) => {
+                                const active = editScheduleDays.includes(dow)
+                                return (
+                                  <button
+                                    key={dow}
+                                    type="button"
+                                    className={`tr-day-btn${active ? ' tr-day-btn--active' : ''}`}
+                                    onClick={() => editToggleDay(dow)}
+                                    aria-pressed={active}
+                                    aria-label={DAY_NAMES[dow]}
+                                  >
+                                    {label}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="cb-field">
+                          <span className="cb-label">Dose times</span>
+                          <div className="tr-slot-list">
+                            {editSlots.map((slot, i) => (
+                              <div key={i}>
+                                <div className="tr-slot-row">
+                                  <input
+                                    type="time"
+                                    className="cb-input tr-slot-time"
+                                    value={slot.time}
+                                    onChange={e => editSetSlotTime(i, e.target.value)}
+                                    aria-invalid={editSlotErrors[i] !== undefined}
+                                  />
+                                  <select
+                                    className="cb-input cb-select tr-slot-food"
+                                    value={slot.foodTiming}
+                                    onChange={e => editSetSlotFood(i, e.target.value as FoodTiming)}
+                                  >
+                                    <option value="before">Before food</option>
+                                    <option value="after">After food</option>
+                                    <option value="with">With food</option>
+                                  </select>
+                                  {editSlots.length > 1 && (
+                                    <button
+                                      type="button"
+                                      className="tr-slot-remove"
+                                      onClick={() => editRemoveSlot(i)}
+                                      aria-label="Remove time"
+                                    >
+                                      <X size={16} />
+                                    </button>
+                                  )}
+                                </div>
+                                {editSlotErrors[i] && (
+                                  <p className="cb-hint cb-hint--error" role="alert" style={{ marginTop: 4 }}>
+                                    {editSlotErrors[i]}
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            className="cb-link-btn"
+                            onClick={editAddSlot}
+                            style={{ marginTop: 8 }}
+                            disabled={editSlots.length >= MAX_SLOTS_PER_DAY}
+                            title={editSlots.length >= MAX_SLOTS_PER_DAY ? 'Maximum 4 doses per day.' : undefined}
+                          >
+                            {editSlots.length >= MAX_SLOTS_PER_DAY ? 'Maximum 4 doses per day' : '+ Add another time'}
+                          </button>
+                          {note}
+                        </div>
+                      </>
+                    )
+                  })()}
 
                   {editError && (
                     <p className="cb-form-error" role="alert">{editError}</p>

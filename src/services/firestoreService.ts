@@ -1190,14 +1190,45 @@ export async function updateRegimen(
     doseAmount?: number
     endDate?: string | null
     ongoing?: boolean
+    // AK-130 — schedule-shape fields. Presence of any of these marks the edit
+    // as a schedule change (stamps scheduleChangedAt → maintainTodaySummary
+    // defers it to tomorrow). slots/scheduleDays apply to fixed-time regimens;
+    // maxDosesPerDay applies to PRN (as-needed).
+    slots?: TimeSlot[]
+    scheduleDays?: number[] | null
+    maxDosesPerDay?: number
   },
 ): Promise<void> {
+  // Defence in depth: these define the regimen's identity/anchor and must
+  // never change via an edit. TypeScript already excludes them from the
+  // updates shape; this strips any that leak in through an untyped caller.
+  const raw = updates as Record<string, unknown>
+  for (const k of ['scheduleType', 'startDate', 'cabinetItemId', 'medicineId', 'displayName']) {
+    if (k in raw) {
+      console.warn(`updateRegimen: stripping disallowed field "${k}"`)
+      delete raw[k]
+    }
+  }
+
   const payload: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
   }
   if (updates.doseAmount !== undefined) payload.doseAmount = updates.doseAmount
   if (updates.endDate !== undefined) payload.endDate = updates.endDate
   if (updates.ongoing !== undefined) payload.ongoing = updates.ongoing
+  if (updates.slots !== undefined) payload.slots = updates.slots
+  if (updates.scheduleDays !== undefined) payload.scheduleDays = updates.scheduleDays
+  if (updates.maxDosesPerDay !== undefined) payload.maxDosesPerDay = updates.maxDosesPerDay
+
+  // AK-130 — any slot-structure change defers to tomorrow via this marker.
+  const isScheduleChange =
+    updates.slots !== undefined ||
+    updates.scheduleDays !== undefined ||
+    updates.maxDosesPerDay !== undefined
+  if (isScheduleChange) {
+    payload.scheduleChangedAt = serverTimestamp()
+  }
+
   await updateDoc(doc(db, regimenPath(hId, tId, rId)), payload)
 }
 

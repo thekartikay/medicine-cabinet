@@ -317,6 +317,12 @@ export interface Regimen {
   // Older regimens predating AK-171 read as undefined; the cron treats
   // undefined as 'Asia/Kolkata' (beta default).
   timezone?: string
+  // AK-130 — Stamped by updateRegimen whenever the slot structure changes
+  // (slots / scheduleDays / maxDosesPerDay). maintainTodaySummary uses it to
+  // freeze TODAY's slots to the pre-edit schedule when scheduleChangedAt is
+  // later than the start of today (in the regimen's timezone); the new
+  // schedule then applies from tomorrow forward. Absent on unedited regimens.
+  scheduleChangedAt?: Timestamp | null
 }
 
 export interface DoseSlotDisplay {
