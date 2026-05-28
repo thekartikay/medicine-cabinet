@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { Bell, Check, Clock, X, AlertTriangle } from 'lucide-react'
 import { auth } from '../lib/firebase'
 import { todayISTString } from '../lib/paths'
+import { getSkipReasonChips } from '../lib/skipReasons'
 import {
   subscribeTreatments,
   loadTodaysDoses,
@@ -22,8 +23,12 @@ import type {
   DoseStatus,
   FoodTiming,
   Notification,
+  SkipReasonDef,
+  SkipReasonId,
+  Treatment,
   TreatmentCategory,
 } from '../types'
+import BottomSheet from '../components/BottomSheet'
 import { DoseHistory } from './DoseHistory'
 import { NotificationsPanel } from './NotificationsPanel'
 
@@ -34,24 +39,8 @@ interface Props {
 
 type LogState = {
   status: DoseStatus
-  skipReason: string | null
+  skipReason: SkipReasonId | null
   lateNote: string | null
-}
-
-// ── Skip-reason validation (same rules as the admin Dashboard) ────────────────
-const SKIP_MIN_CHARS = 25
-const SKIP_MIN_LETTER_PCT = 0.6
-const SKIP_ERROR =
-  'Please describe the reason in your own words (minimum 25 characters)'
-
-function validateSkipReason(text: string): { valid: boolean; count: number } {
-  const trimmed = text.trim()
-  const letterCount = (trimmed.match(/[a-zA-Z]/g) ?? []).length
-  const letterPct = trimmed.length > 0 ? letterCount / trimmed.length : 0
-  return {
-    valid: trimmed.length >= SKIP_MIN_CHARS && letterPct >= SKIP_MIN_LETTER_PCT,
-    count: trimmed.length,
-  }
 }
 
 // ── Time helpers ──────────────────────────────────────────────────────────────
@@ -73,20 +62,16 @@ function nowHHMM(): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
-// 30-min increments from max(now, scheduledTime), rounded up, through 23:30 IST.
-function generateLateOptionsForSlot(scheduledTime: string): string[] {
-  const { h: nowH, m: nowM } = nowISTHM()
-  const [schedH, schedM] = scheduledTime.split(':').map(Number)
-  const nowMins   = nowH   * 60 + nowM
-  const schedMins = schedH * 60 + schedM
-  let minMins = Math.max(nowMins, schedMins)
-  if (minMins % 30 !== 0) minMins = Math.ceil(minMins / 30) * 30
-  const maxMins = 23 * 60 + 30
+// AK-154 — 30-min increments from 06:00 IST up to the current IST time, for the
+// "Earlier today" late-take selector. Never returns a future time.
+function generatePastTimeOptions(): string[] {
+  const { h, m } = nowISTHM()
+  const nowMins = h * 60 + m
   const options: string[] = []
-  for (let mins = minMins; mins <= maxMins; mins += 30) {
-    const h = Math.floor(mins / 60)
-    const m = mins % 60
-    options.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+  for (let mins = 6 * 60; mins <= nowMins; mins += 30) {
+    const hh = Math.floor(mins / 60)
+    const mm = mins % 60
+    options.push(`${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`)
   }
   return options
 }
@@ -146,6 +131,9 @@ export function MemberDoseCard({ user, household }: Props) {
   // Live data
   const [todaysDoses, setTodaysDoses] = useState<DoseSlotDisplay[]>([])
   const [logsBySlot, setLogsBySlot] = useState<Record<string, LogState>>({})
+  // AK-154 — Live treatments, used to resolve each dose's category (drives the
+  // chip set, the PRN "Not taking today" rename, and the antibiotic gate).
+  const [treatments, setTreatments] = useState<Treatment[]>([])
 
   // UI state
   const [pendingSlot, setPendingSlot] = useState<string | null>(null)
@@ -155,14 +143,16 @@ export function MemberDoseCard({ user, household }: Props) {
   // the 1.6s window via the same setTimeout that clears confirmedSlot.
   const [confirmedMessage, setConfirmedMessage] = useState<string | null>(null)
   const [logError, setLogError] = useState('')
+  const [actionToast, setActionToast] = useState<string | null>(null)
 
-  // Modals
-  const [skipModalSlot, setSkipModalSlot] = useState<DoseSlotDisplay | null>(null)
-  const [skipReasonText, setSkipReasonText] = useState('')
-
-  const [lateModalSlot, setLateModalSlot] = useState<DoseSlotDisplay | null>(null)
-  const [lateOptions, setLateOptions] = useState<string[]>([])
-  const [lateTimeChoice, setLateTimeChoice] = useState('')
+  // AK-154 — Skip / Late bottom sheet. A single sheet drives both flows;
+  // sheetView swaps its body between the reason chips, the antibiotic friction
+  // gate, and the late-take time picker without ever opening a second sheet.
+  const [sheetSlot, setSheetSlot] = useState<DoseSlotDisplay | null>(null)
+  const [sheetView, setSheetView] = useState<'reasons' | 'antibiotic' | 'late'>('reasons')
+  const [otherText, setOtherText] = useState('')
+  const [lateMode, setLateMode] = useState<'now' | 'earlier'>('now')
+  const [lateEarlierTime, setLateEarlierTime] = useState('')
 
   // Notifications panel state + live subscription. Member-side filtering
   // happens at render time so we can show the household-wide low_stock and
@@ -197,12 +187,13 @@ export function MemberDoseCard({ user, household }: Props) {
   // ── Subscribe to today's doses + logs, filtered to this user ──────────────
   useEffect(() => {
     let cancelled = false
-    const unsub = subscribeTreatments(household.hId, async () => {
+    const unsub = subscribeTreatments(household.hId, async (treats) => {
       const [doses, logs] = await Promise.all([
         loadTodaysDoses(household.hId),
         loadTodaysLogs(household.hId),
       ])
       if (cancelled) return
+      setTreatments(treats)
       const myDoses = doses.filter(d => d.patientId === user.uid)
       setTodaysDoses(myDoses)
       setLogsBySlot(prev => {
@@ -220,6 +211,13 @@ export function MemberDoseCard({ user, household }: Props) {
     })
     return () => { cancelled = true; unsub() }
   }, [household.hId, user.uid])
+
+  // tId → treatment category lookup for the open sheet's chip set + PRN rename.
+  const treatmentCategoryById = useMemo(() => {
+    const m: Record<string, TreatmentCategory> = {}
+    for (const tr of treatments) m[tr.tId] = tr.category
+    return m
+  }, [treatments])
 
   // ── Derived: next pending dose, separately-missed dose, progress totals ──
   const { nextPending, missedToShow, allDoneForToday, loggedCount, totalDoses } = useMemo(() => {
@@ -364,12 +362,17 @@ export function MemberDoseCard({ user, household }: Props) {
   // ── History sub-view ──────────────────────────────────────────────────────
   const [showHistory, setShowHistory] = useState(false)
 
-  // ── Action handler (shared by all three buttons) ──────────────────────────
+  // ── Action handler (shared by Taken / Skip / Late) ─────────────────────────
+  // Returns true on a successful write so the caller can fire the right toast.
   async function handleLog(
     slot: DoseSlotDisplay,
     status: DoseStatus,
-    opts: { skipReason?: string | null } = {},
-  ) {
+    opts: {
+      skipReason?: SkipReasonId | null
+      skipReasonText?: string | null
+      takenAt?: Date | null
+    } = {},
+  ): Promise<boolean> {
     setLogError('')
     setPendingSlot(slot.slotId)
 
@@ -392,6 +395,8 @@ export function MemberDoseCard({ user, household }: Props) {
         doseUnit: slot.doseUnit,
         status,
         skipReason,
+        skipReasonText: opts.skipReasonText ?? null,
+        takenAt: opts.takenAt ?? null,
         createdBy: user.uid,
         scheduleType: slot.scheduleType,
       })
@@ -407,6 +412,7 @@ export function MemberDoseCard({ user, household }: Props) {
           })
         }, 1600)
       }
+      return true
     } catch {
       setLogsBySlot(prev => {
         const next = { ...prev }
@@ -414,46 +420,102 @@ export function MemberDoseCard({ user, household }: Props) {
         return next
       })
       setLogError('Could not log dose. Please try again.')
+      return false
     } finally {
       setPendingSlot(null)
-      if (status === 'skipped') closeSkipModal()
-      if (status === 'late')    closeLateModal()
     }
   }
 
-  function openSkipModal(slot: DoseSlotDisplay) {
-    closeLateModal()
-    setSkipReasonText('')
-    setSkipModalSlot(slot)
+  function showToast(message: string) {
+    setActionToast(message)
+    setTimeout(() => setActionToast(null), 2600)
+  }
+
+  // ── Sheet open/close ────────────────────────────────────────────────────────
+  function openSkipSheet(slot: DoseSlotDisplay) {
+    setSheetSlot(slot)
+    setSheetView('reasons')
+    setOtherText('')
+    setLateMode('now')
+    setLateEarlierTime('')
     setLogError('')
   }
 
-  function closeSkipModal() {
-    setSkipModalSlot(null)
-    setSkipReasonText('')
-  }
-
-  function openLateModal(slot: DoseSlotDisplay) {
-    closeSkipModal()
-    const opts = generateLateOptionsForSlot(slot.time)
-    setLateOptions(opts)
-    setLateTimeChoice(opts[0] ?? '')
-    setLateModalSlot(slot)
+  function openLateSheet(slot: DoseSlotDisplay) {
+    setSheetSlot(slot)
+    setSheetView('late')
+    setOtherText('')
+    setLateMode('now')
+    setLateEarlierTime('')
     setLogError('')
   }
 
-  function closeLateModal() {
-    setLateModalSlot(null)
-    setLateTimeChoice('')
+  function closeSheet() {
+    setSheetSlot(null)
+  }
+
+  // ── Sheet confirm flows ─────────────────────────────────────────────────────
+  async function confirmSkip(
+    slot: DoseSlotDisplay,
+    reasonId: SkipReasonId,
+    meta: { text?: string | null; isClinical?: boolean; isPrn?: boolean },
+  ) {
+    const ok = await handleLog(slot, 'skipped', {
+      skipReason: reasonId,
+      skipReasonText: meta.text ?? null,
+    })
+    closeSheet()
+    if (ok) {
+      showToast(
+        meta.isPrn
+          ? 'Got it. Not logging a dose for today.'
+          : meta.isClinical
+            ? 'Dose skipped. Priya has been notified right away.'
+            : 'Dose skipped. Priya has been notified.',
+      )
+    }
+  }
+
+  function onChipTap(slot: DoseSlotDisplay, chip: SkipReasonDef, isPrn: boolean) {
+    // Antibiotic friction gate only for clinical reasons on acute courses.
+    if (chip.isClinical && treatmentCategoryById[slot.treatmentId] === 'acute') {
+      setSheetView('antibiotic')
+      return
+    }
+    void confirmSkip(slot, chip.id, { isClinical: chip.isClinical, isPrn })
+  }
+
+  async function confirmLate(slot: DoseSlotDisplay) {
+    // "Just now" → the current instant; "Earlier today" → the chosen IST time.
+    const takenAt =
+      lateMode === 'now'
+        ? new Date()
+        : new Date(`${todayISTString()}T${lateEarlierTime}:00+05:30`)
+    const ok = await handleLog(slot, 'late', { takenAt })
+    closeSheet()
+    if (ok) showToast('Logged as taken (late). Priya has been notified.')
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
   const greeting = t(`greeting.${timeOfDayKey()}`)
   const name = firstName(user.displayName)
 
-  const skipPending = pendingSlot === skipModalSlot?.slotId
-  const latePending = pendingSlot === lateModalSlot?.slotId
-  const skipCheck = skipModalSlot ? validateSkipReason(skipReasonText) : null
+  const sheetPending = sheetSlot ? pendingSlot === sheetSlot.slotId : false
+  const sheetCategory: TreatmentCategory =
+    (sheetSlot && treatmentCategoryById[sheetSlot.treatmentId]) || 'chronic'
+  const sheetIsPrn = sheetCategory === 'prn'
+  const sheetDosageForm = sheetSlot
+    ? cabinetItems.find(i => i.iId === sheetSlot.cabinetItemId)?.dosageForm ?? undefined
+    : undefined
+  const sheetChips = sheetSlot
+    ? getSkipReasonChips(sheetCategory, sheetDosageForm ?? undefined)
+    : []
+  const sheetTitle =
+    sheetView === 'late'       ? 'Take later'
+    : sheetView === 'antibiotic' ? 'Hold on'
+    : sheetIsPrn               ? 'Not taking today'
+    :                            'Skip this dose'
+  const pastTimeOptions = sheetView === 'late' ? generatePastTimeOptions() : []
 
   if (showHistory) {
     return (
@@ -532,6 +594,7 @@ export function MemberDoseCard({ user, household }: Props) {
 
         {nextPending ? (() => {
           const isFlexible = nextPending.scheduleType === 'flexible-daily'
+          const isPrn = treatmentCategoryById[nextPending.treatmentId] === 'prn'
           return (
           <div
             className={`md-dose-card${confirmedSlot === nextPending.slotId ? ' md-dose-card--just-confirmed' : ''}`}
@@ -567,11 +630,11 @@ export function MemberDoseCard({ user, household }: Props) {
                 <button
                   type="button"
                   className="md-btn md-btn-secondary"
-                  onClick={() => openSkipModal(nextPending)}
+                  onClick={() => openSkipSheet(nextPending)}
                   disabled={pendingSlot === nextPending.slotId}
                 >
                   <X size={18} />
-                  <span>{t('member.skip')}</span>
+                  <span>{isPrn ? 'Not taking today' : t('member.skip')}</span>
                 </button>
                 {/* AK-131 — late mode is meaningless when the slot has no
                     fixed time; hide the button for flexible-daily. */}
@@ -579,7 +642,7 @@ export function MemberDoseCard({ user, household }: Props) {
                   <button
                     type="button"
                     className="md-btn md-btn-secondary"
-                    onClick={() => openLateModal(nextPending)}
+                    onClick={() => openLateSheet(nextPending)}
                     disabled={pendingSlot === nextPending.slotId}
                   >
                     <Clock size={18} />
@@ -630,7 +693,7 @@ export function MemberDoseCard({ user, household }: Props) {
                 {' · '}{missedToShow.doseAmount}{' '}
                 {unitLabel(missedToShow.doseAmount, missedToShow.doseUnit)}
               </p>
-              {/* AK-131 — flex missed slots skip the late-modal (no fixed time
+              {/* AK-131 — flex missed slots skip the late picker (no fixed time
                   to be late from). Tap-to-take logs it as 'taken' directly. */}
               <button
                 type="button"
@@ -638,7 +701,7 @@ export function MemberDoseCard({ user, household }: Props) {
                 onClick={() =>
                   isFlexible
                     ? handleLog(missedToShow, 'taken')
-                    : openLateModal(missedToShow)
+                    : openLateSheet(missedToShow)
                 }
                 disabled={pendingSlot === missedToShow.slotId}
               >
@@ -772,6 +835,12 @@ export function MemberDoseCard({ user, household }: Props) {
         </div>
       )}
 
+      {actionToast && (
+        <div className="db-toast" role="status" aria-live="polite">
+          {actionToast}
+        </div>
+      )}
+
       {/* ── Notifications panel (member-filtered) ────────────────── */}
       <NotificationsPanel
         open={showNotifPanel}
@@ -781,131 +850,168 @@ export function MemberDoseCard({ user, household }: Props) {
         hId={household.hId}
       />
 
-      {/* ── Skip modal ─────────────────────────────────────────── */}
-      {skipModalSlot && skipCheck && (
-        <div
-          className="tr-modal-backdrop"
-          onClick={skipPending ? undefined : closeSkipModal}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="md-skip-modal-title"
-        >
-          <div className="tr-modal" onClick={e => e.stopPropagation()}>
-            <h3 id="md-skip-modal-title" className="tr-modal-title">Why are you skipping this dose?</h3>
-            <p className="tr-modal-subtitle">Please describe in your own words</p>
-            <textarea
-              className="tr-modal-textarea"
-              rows={3}
-              value={skipReasonText}
-              onChange={e => setSkipReasonText(e.target.value)}
-              placeholder="e.g. Feeling nauseous, doctor advised to pause for today…"
-              aria-invalid={!skipCheck.valid && skipCheck.count > 0}
-              autoFocus
-            />
-            <div className={
-              skipCheck.valid       ? 'tr-modal-counter tr-modal-counter--valid'
-              : skipCheck.count > 0 ? 'tr-modal-counter tr-modal-counter--invalid'
-              :                       'tr-modal-counter'
-            }>
-              {skipCheck.count} / {SKIP_MIN_CHARS}
-            </div>
-            {!skipCheck.valid && skipCheck.count > 0 && (
-              <p className="tr-modal-error" role="alert">{SKIP_ERROR}</p>
-            )}
-            <div className="tr-modal-actions">
-              <button
-                type="button"
-                className="tr-modal-btn tr-modal-btn--secondary"
-                onClick={closeSkipModal}
-                disabled={skipPending}
-              >Cancel</button>
-              <button
-                type="button"
-                className="tr-modal-btn tr-modal-btn--primary"
-                onClick={() => handleLog(skipModalSlot, 'skipped', { skipReason: skipReasonText.trim() })}
-                disabled={!skipCheck.valid || skipPending}
-              >
-                {skipPending ? 'Skipping…' : 'Confirm Skip'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ── AK-154 — Skip / Late bottom sheet ─────────────────────── */}
+      <BottomSheet isOpen={!!sheetSlot} onClose={closeSheet} title={sheetTitle}>
+        {sheetSlot && (
+          <>
+            <p className="tr-modal-subtitle">{sheetSlot.medicineName}</p>
 
-      {/* ── Late modal ─────────────────────────────────────────── */}
-      {lateModalSlot && (
-        <div
-          className="tr-modal-backdrop"
-          onClick={latePending ? undefined : closeLateModal}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="md-late-modal-title"
-        >
-          <div className="tr-modal" onClick={e => e.stopPropagation()}>
-            <h3 id="md-late-modal-title" className="tr-modal-title">When will you take this?</h3>
-            <p className="tr-modal-subtitle">{lateModalSlot.medicineName} · scheduled {formatTimeFriendly(lateModalSlot.time)}</p>
-            {lateOptions.length === 0 ? (
+            {/* Reason chips view */}
+            {sheetView === 'reasons' && (
               <>
-                <p className="tr-modal-empty">
-                  No time slots remaining today. You can still mark this as taken now.
-                </p>
-                <div className="tr-modal-actions">
+                {/* Late Take CTA — hidden for PRN ("not taking today" has no
+                    notion of being late). */}
+                {!sheetIsPrn && (
                   <button
                     type="button"
-                    className="tr-modal-btn tr-modal-btn--secondary"
-                    onClick={closeLateModal}
-                    disabled={latePending}
-                  >Cancel</button>
-                  <button
-                    type="button"
-                    className="tr-modal-btn tr-modal-btn--primary"
-                    onClick={() => handleLog(lateModalSlot, 'taken')}
-                    disabled={latePending}
+                    className="md-btn md-btn-secondary md-sheet-late-cta"
+                    onClick={() => setSheetView('late')}
+                    disabled={sheetPending}
                   >
-                    {latePending ? 'Saving…' : t('member.markAsTaken')}
+                    <Clock size={18} />
+                    <span>I took it at a different time →</span>
                   </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="tr-time-grid" role="radiogroup" aria-label="Intended time">
-                  {lateOptions.map(opt => (
+                )}
+
+                <h4 className="md-section-title">I'm skipping because…</h4>
+                <div className="tr-time-grid">
+                  {sheetChips.map(chip => (
                     <button
-                      key={opt}
+                      key={chip.id}
                       type="button"
-                      role="radio"
-                      aria-checked={lateTimeChoice === opt}
-                      className={`tr-time-chip${lateTimeChoice === opt ? ' tr-time-chip--active' : ''}`}
-                      onClick={() => setLateTimeChoice(opt)}
+                      className="tr-time-chip"
+                      onClick={() => onChipTap(sheetSlot, chip, sheetIsPrn)}
+                      disabled={sheetPending}
                     >
-                      {formatTimeFriendly(opt)}
+                      {chip.label}
                     </button>
                   ))}
                 </div>
+
+                <textarea
+                  className="tr-modal-textarea"
+                  rows={2}
+                  maxLength={120}
+                  value={otherText}
+                  onChange={e => setOtherText(e.target.value)}
+                  placeholder="Other reason (optional)…"
+                />
                 <div className="tr-modal-actions">
                   <button
                     type="button"
-                    className="tr-modal-btn tr-modal-btn--secondary"
-                    onClick={closeLateModal}
-                    disabled={latePending}
-                  >Cancel</button>
-                  <button
-                    type="button"
                     className="tr-modal-btn tr-modal-btn--primary"
-                    onClick={() => handleLog(lateModalSlot, 'late', {
-                      skipReason: `Taking at ${formatTimeFriendly(lateTimeChoice)}`,
-                    })}
-                    disabled={!lateTimeChoice || latePending}
+                    onClick={() => confirmSkip(sheetSlot, 'other', { text: otherText.trim(), isPrn: sheetIsPrn })}
+                    disabled={!otherText.trim() || sheetPending}
                   >
-                    {latePending ? 'Saving…' : 'Confirm'}
+                    {sheetPending ? 'Skipping…' : 'Skip'}
                   </button>
                 </div>
               </>
             )}
-          </div>
-        </div>
-      )}
+
+            {/* Antibiotic friction gate (acute + clinical reason) */}
+            {sheetView === 'antibiotic' && (
+              <>
+                <div className="md-sheet-warning">
+                  <AlertTriangle size={20} aria-hidden="true" />
+                  <p>
+                    Stopping antibiotics early can let the infection come back
+                    harder to treat.
+                  </p>
+                </div>
+                <div className="tr-modal-actions">
+                  <button
+                    type="button"
+                    className="tr-modal-btn tr-modal-btn--primary"
+                    onClick={closeSheet}
+                    disabled={sheetPending}
+                  >
+                    I'll take it now
+                  </button>
+                  <button
+                    type="button"
+                    className="tr-modal-btn tr-modal-btn--secondary"
+                    onClick={() => confirmSkip(sheetSlot, 'feeling_better', { isClinical: true })}
+                    disabled={sheetPending}
+                  >
+                    {sheetPending ? 'Skipping…' : 'Still skip'}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Late Take sub-flow */}
+            {sheetView === 'late' && (
+              <>
+                <h4 className="md-section-title">When did you take it?</h4>
+                <div className="tr-time-grid" role="radiogroup" aria-label="When taken">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={lateMode === 'now'}
+                    className={`tr-time-chip${lateMode === 'now' ? ' tr-time-chip--active' : ''}`}
+                    onClick={() => setLateMode('now')}
+                  >
+                    Just now
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={lateMode === 'earlier'}
+                    className={`tr-time-chip${lateMode === 'earlier' ? ' tr-time-chip--active' : ''}`}
+                    onClick={() => {
+                      setLateEarlierTime(pastTimeOptions[pastTimeOptions.length - 1] ?? '')
+                      setLateMode('earlier')
+                    }}
+                  >
+                    Earlier today
+                  </button>
+                </div>
+
+                {lateMode === 'earlier' && (
+                  pastTimeOptions.length === 0 ? (
+                    <p className="tr-modal-empty">No earlier times today.</p>
+                  ) : (
+                    <div className="tr-time-grid" role="radiogroup" aria-label="Time taken">
+                      {pastTimeOptions.map(opt => (
+                        <button
+                          key={opt}
+                          type="button"
+                          role="radio"
+                          aria-checked={lateEarlierTime === opt}
+                          className={`tr-time-chip${lateEarlierTime === opt ? ' tr-time-chip--active' : ''}`}
+                          onClick={() => setLateEarlierTime(opt)}
+                        >
+                          {formatTimeFriendly(opt)}
+                        </button>
+                      ))}
+                    </div>
+                  )
+                )}
+
+                <div className="tr-modal-actions">
+                  <button
+                    type="button"
+                    className="tr-modal-btn tr-modal-btn--secondary"
+                    onClick={closeSheet}
+                    disabled={sheetPending}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="tr-modal-btn tr-modal-btn--primary"
+                    onClick={() => confirmLate(sheetSlot)}
+                    disabled={sheetPending || (lateMode === 'earlier' && !lateEarlierTime)}
+                  >
+                    {sheetPending ? 'Saving…' : 'Confirm'}
+                  </button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </BottomSheet>
     </div>
   )
 }
-

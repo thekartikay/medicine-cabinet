@@ -66,6 +66,7 @@ import type {
   Regimen,
   RestockRequest,
   ScheduleType,
+  SkipReasonId,
   TimeSlot,
   TodaySummary,
   Treatment,
@@ -641,8 +642,16 @@ export async function logDose(
     doseAmount: number
     doseUnit: string
     status: DoseStatus
-    skipReason?: string | null
+    // AK-154 — structured skip reason id (was free-text). 'other' pairs with
+    // skipReasonText for the user's own words (max 120 chars, enforced by UI).
+    skipReason?: SkipReasonId | null
+    skipReasonText?: string | null
     lateNote?: string | null
+    // AK-154 — for status 'late', the actual instant the dose was taken
+    // ("Just now" or an earlier-today time). Written as a Timestamp so the
+    // log records when the dose was really taken, not when it was logged.
+    // Ignored for non-late statuses (those stamp serverTimestamp()).
+    takenAt?: Date | null
     createdBy: string
     // AK-131 — When 'flexible-daily', the slotId carries a `-flex` suffix
     // instead of the HHmm tail so it pairs with the synthetic slot
@@ -737,8 +746,16 @@ export async function logDose(
       scheduledDate: args.scheduledDate,
       scheduledTime: args.scheduledTime,
       status: args.status,
-      takenAt: serverTimestamp(),
+      // AK-154 — a late take records the instant the dose was actually taken
+      // (caller-supplied Date); everything else stamps when the log was written.
+      takenAt:
+        args.status === 'late' && args.takenAt
+          ? Timestamp.fromDate(args.takenAt)
+          : serverTimestamp(),
       skipReason: args.skipReason ?? null,
+      skipReasonText: args.skipReasonText ?? null,
+      // Stamped by the onLogWritten Cloud Function after the caregiver FCM fires.
+      caregiverNotifiedAt: null,
       lateNote: args.lateNote ?? null,
       doseAmount: args.doseAmount,
       doseUnit: args.doseUnit,
@@ -1285,7 +1302,10 @@ export async function logRetroactiveDoses(
       // scheduledAt (the dose's intended instant). For retro logs marked
       // 'taken', takenAt is now; 'skipped' carries null.
       takenAt: s.status === 'taken' ? serverTimestamp() : null,
-      skipReason:
+      // AK-154 — skipReason is now a structured id; the retro-catch-up
+      // explanation lives in skipReasonText under the 'other' bucket.
+      skipReason: s.status === 'skipped' ? ('other' as SkipReasonId) : null,
+      skipReasonText:
         s.status === 'skipped'
           ? 'Not logged at time of treatment creation'
           : null,

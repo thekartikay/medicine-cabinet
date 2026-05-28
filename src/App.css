@@ -5259,6 +5259,30 @@
   margin: 6px auto 8px;
 }
 
+/* AK-154 — antibiotic friction-gate banner inside the skip/late sheet
+   (used by both MemberDoseCard and the admin Dashboard own-dose sheet). */
+.md-sheet-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-left: 4px solid #EF9F27;
+  background: rgba(239, 159, 39, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+
+.md-sheet-warning svg {
+  flex-shrink: 0;
+  color: #EF9F27;
+  margin-top: 1px;
+}
+
+.md-sheet-warning p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
 .bs-title-row {
   display: flex;
   align-items: center;

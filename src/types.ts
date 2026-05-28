@@ -362,7 +362,10 @@ export interface TodaySummarySlot {
   cabinetItemId: string
   status: DoseStatus | 'pending'
   loggedAt: Timestamp | null
-  skipReason: string | null
+  // AK-154 — mirrors DoseLog.skipReason (structured id) + skipReasonText so the
+  // admin dashboard can render a label without reading the raw log doc.
+  skipReason: SkipReasonId | null
+  skipReasonText: string | null
   lateNote: string | null
   adminOverride: boolean
   createdBy: string | null
@@ -437,6 +440,31 @@ export interface Notification {
   relatedMedicineId: string | null
 }
 
+// ── Skip reasons (AK-154) ────────────────────────────────────
+// Structured skip reasons replace the old free-text skipReason string. The
+// member's skip bottom sheet surfaces category-aware chips (see
+// src/lib/skipReasons.ts); the chosen chip's id is persisted on
+// DoseLog.skipReason. The 'other' chip pairs with DoseLog.skipReasonText for
+// the user's own words.
+export type SkipReasonCategory = 'time_place' | 'medication' | 'event' | 'other'
+
+export type SkipReasonId =
+  | 'traveling' | 'forgot' | 'busy' | 'not_home' | 'away_from_supplies'
+  | 'side_effects' | 'ran_out' | 'feeling_better' | 'doctor_changed'
+  | 'adverse_reaction' | 'no_symptoms' | 'pain_resolved' | 'took_alternative' | 'at_daily_limit'
+  | 'inhaler_empty' | 'device_issue'
+  | 'blood_sugar_low' | 'injection_site_sore'
+  | 'fasting' | 'festival'
+  | 'other'
+
+export interface SkipReasonDef {
+  id: SkipReasonId
+  label: string
+  category: SkipReasonCategory
+  isClinical?: boolean    // triggers immediate high-priority FCM to admin
+  isRefillAlert?: boolean // triggers FCM with refill prompt copy
+}
+
 // ── Dose logs ────────────────────────────────────────────────
 
 export type DoseStatus = 'taken' | 'skipped' | 'late' | 'missed'
@@ -451,9 +479,20 @@ export interface DoseLog {
   scheduledDate: string    // YYYY-MM-DD
   scheduledTime: string    // HH:MM
   status: DoseStatus
+  // AK-154 — For status 'late', takenAt is the user-supplied instant they
+  // actually took the dose ("Just now" or an earlier-today time), written via
+  // Timestamp.fromDate(). For every other status it is the serverTimestamp() of
+  // when the log was written.
   takenAt: Timestamp | null
-  skipReason: string | null
-  lateNote: string | null     // intended late time for status='late' (HH:MM in 24h, IST)
+  // AK-154 — Structured skip reason id (was a free-text string pre-AK-154).
+  skipReason: SkipReasonId | null
+  // AK-154 — Free text accompanying skipReason === 'other'. Max 120 chars,
+  // user's own words. Null/absent for chip-based skips and non-skip statuses.
+  skipReasonText?: string | null
+  // AK-154 — Stamped by onLogWritten after a skip/late caregiver FCM fires.
+  // Null at client write time; stays null for PRN skips (no caregiver push).
+  caregiverNotifiedAt?: Timestamp | null
+  lateNote: string | null     // legacy intended-late time (HH:MM 24h IST); unused for new late takes
   doseAmount: number
   doseUnit: string
   cabinetItemId: string

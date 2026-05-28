@@ -6,7 +6,8 @@ import {
   getHouseholdMembers,
 } from '../services/firestoreService'
 import { todayISTString } from '../lib/paths'
-import type { DoseLog, HouseholdMember, Regimen, Treatment } from '../types'
+import { SKIP_REASON_LABELS } from '../lib/skipReasons'
+import type { DoseLog, HouseholdMember, Regimen, SkipReasonId, Treatment } from '../types'
 
 interface Props {
   hId: string
@@ -23,7 +24,8 @@ interface DayEntry {
   medicineName: string
   scheduledTime: string        // "HH:MM"
   status: EntryStatus
-  skipReason: string | null
+  skipReason: SkipReasonId | null
+  skipReasonText: string | null
   patientId: string            // which member this dose belongs to
   memberName: string | null    // displayName for member-aware rendering
 }
@@ -138,6 +140,7 @@ export function DoseHistory({ hId, onBack, filterUid }: Props) {
                   scheduledTime: '',
                   status,
                   skipReason: log?.skipReason ?? null,
+                  skipReasonText: log?.skipReasonText ?? null,
                   patientId: t.memberId,
                   memberName: t.memberName,
                 })
@@ -158,6 +161,7 @@ export function DoseHistory({ hId, onBack, filterUid }: Props) {
                   scheduledTime: slot.time,
                   status,
                   skipReason: log?.skipReason ?? null,
+                  skipReasonText: log?.skipReasonText ?? null,
                   patientId: t.memberId,
                   memberName: t.memberName,
                 })
@@ -299,7 +303,10 @@ export function DoseHistory({ hId, onBack, filterUid }: Props) {
                         </span>
                       </div>
                       {e.status === 'skipped' && e.skipReason && (
-                        <p className="tr-log-reason">"{e.skipReason}"</p>
+                        <p className="tr-log-reason">
+                          {SKIP_REASON_LABELS[e.skipReason]}
+                          {e.skipReasonText ? ` — ${e.skipReasonText}` : ''}
+                        </p>
                       )}
                     </li>
                   ))}

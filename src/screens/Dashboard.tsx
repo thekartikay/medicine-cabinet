@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
 import type { User } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import {
   Home, Pill, CalendarHeart, Settings as SettingsIcon,
-  Check, Clock, X, Minus, Bell, ChevronDown, BriefcaseMedical,
+  Check, Clock, X, Minus, Bell, ChevronDown, BriefcaseMedical, AlertTriangle,
 } from 'lucide-react'
 import { auth, functions } from '../lib/firebase'
 import { todayISTString, getDefaultCabinetId } from '../lib/paths'
 import { CABINET_QUERY_ENABLED } from '../lib/featureFlags'
+import { getSkipReasonChips, SKIP_REASON_LABELS } from '../lib/skipReasons'
 import { CabinetQueryFAB } from '../components/CabinetQueryFAB'
 import { CabinetQueryModal } from '../components/CabinetQueryModal'
+import BottomSheet from '../components/BottomSheet'
 import {
   getDefaultCabinetItems,
   subscribeTreatments,
@@ -26,7 +28,7 @@ import {
 } from '../services/firestoreService'
 import type { TodaySummary } from '../types'
 import { NotificationsPanel } from './NotificationsPanel'
-import type { CabinetItem, DoseSlotDisplay, DoseStatus, FoodTiming, Notification, Regimen, Treatment } from '../types'
+import type { CabinetItem, DoseSlotDisplay, DoseStatus, FoodTiming, Notification, Regimen, SkipReasonDef, SkipReasonId, Treatment, TreatmentCategory } from '../types'
 import { CabinetTab } from './Cabinet'
 import { SettingsTab } from './Settings'
 import { TreatmentsTab } from './Treatments'
@@ -77,31 +79,16 @@ function doseUnitLabel(amount: number, unit: string): string {
 
 type LogState = {
   status: DoseStatus
-  skipReason: string | null
+  // AK-154 — structured skip reason id + optional free text (the admin
+  // dashboard renders a label via SKIP_REASON_LABELS).
+  skipReason: SkipReasonId | null
+  skipReasonText: string | null
   lateNote: string | null
   adminOverride: boolean
   createdBy: string | null
 }
 
-// ── Skip-reason validation ──────────────────────────────────
-// a) trimmed length >= 25  (also covers "only whitespace")
-// b) at least 60% of (trimmed) characters are letters a-z/A-Z
-const SKIP_MIN_CHARS = 25
-const SKIP_MIN_LETTER_PCT = 0.6
-const SKIP_ERROR =
-  'Please describe the reason in your own words (minimum 25 characters)'
-
-function validateSkipReason(text: string): { valid: boolean; count: number } {
-  const trimmed = text.trim()
-  const letterCount = (trimmed.match(/[a-zA-Z]/g) ?? []).length
-  const letterPct = trimmed.length > 0 ? letterCount / trimmed.length : 0
-  return {
-    valid: trimmed.length >= SKIP_MIN_CHARS && letterPct >= SKIP_MIN_LETTER_PCT,
-    count: trimmed.length,
-  }
-}
-
-// ── Late time picker helpers ────────────────────────────────
+// ── Time helpers ────────────────────────────────────────────
 function nowISTHM(): { h: number; m: number } {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Kolkata',
@@ -115,22 +102,16 @@ function nowISTHM(): { h: number; m: number } {
   }
 }
 
-// 30-min increments from max(now, scheduledTime), rounded up, through 23:30 IST.
-// Returns [] if no slots remain today.
-function generateLateOptionsForSlot(scheduledTime: string): string[] {
-  const { h: nowH, m: nowM } = nowISTHM()
-  const [schedH, schedM] = scheduledTime.split(':').map(Number)
-  const nowMins   = nowH   * 60 + nowM
-  const schedMins = schedH * 60 + schedM
-  let minMins = Math.max(nowMins, schedMins)
-  // Round up to next 30-minute mark
-  if (minMins % 30 !== 0) minMins = Math.ceil(minMins / 30) * 30
-  const maxMins = 23 * 60 + 30
+// AK-154 — 30-min increments from 06:00 IST up to the current IST time, for the
+// "Earlier today" late-take selector. Never returns a future time.
+function generatePastTimeOptions(): string[] {
+  const { h, m } = nowISTHM()
+  const nowMins = h * 60 + m
   const options: string[] = []
-  for (let mins = minMins; mins <= maxMins; mins += 30) {
-    const h = Math.floor(mins / 60)
-    const m = mins % 60
-    options.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+  for (let mins = 6 * 60; mins <= nowMins; mins += 30) {
+    const hh = Math.floor(mins / 60)
+    const mm = mins % 60
+    options.push(`${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`)
   }
   return options
 }
@@ -159,19 +140,6 @@ function minsSinceScheduledHHMM(slotTime: string): number {
   const [sh, sm] = slotTime.split(':').map(Number)
   const { h: nh, m: nm } = nowISTHM()
   return (nh * 60 + nm) - (sh * 60 + sm)
-}
-
-// Recover the late-time the user committed to when they tapped "Late".
-// New logs store it as `skipReason: "Taking at 4:30 pm"`; old logs stored
-// only `lateNote: "16:30"`. Both produce the same display.
-function lateDetail(log: LogState): string {
-  if (log.skipReason) {
-    const m = log.skipReason.match(/^Taking at\s+(.+)$/i)
-    if (m) return `Late — taken at ${m[1]}`
-    return `Late — ${log.skipReason}`
-  }
-  if (log.lateNote) return `Late — taken at ${formatTimeFriendly(log.lateNote)}`
-  return 'Late'
 }
 
 // Status-readout kinds used in Priya's read-only dashboard. Five variants
@@ -213,12 +181,15 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
   // re-renders during the 1.6s window. Cleared on the same timer that
   // clears confirmedSlot.
   const [confirmedMessage, setConfirmedMessage] = useState<string | null>(null)
-  const [skipModeFor, setSkipModeFor] = useState<string | null>(null)
-  const [skipReasonText, setSkipReasonText] = useState('')
-  const [lateModeFor, setLateModeFor] = useState<string | null>(null)
-  const [lateOptions, setLateOptions] = useState<string[]>([])
-  const [lateTimeChoice, setLateTimeChoice] = useState('')
   const [logError, setLogError] = useState('')
+  // AK-154 — admin's own-dose skip/late bottom sheet (parity with the member
+  // card). One sheet drives both flows; sheetView swaps reason chips ↔ the
+  // antibiotic gate ↔ the late-take picker.
+  const [sheetSlot, setSheetSlot] = useState<DoseSlotDisplay | null>(null)
+  const [sheetView, setSheetView] = useState<'reasons' | 'antibiotic' | 'late'>('reasons')
+  const [otherText, setOtherText] = useState('')
+  const [lateMode, setLateMode] = useState<'now' | 'earlier'>('now')
+  const [lateEarlierTime, setLateEarlierTime] = useState('')
   // AK-173 — Rate-limit "Remind" to one tap per slot per 30 min. Map values
   // are the Date.now() at the moment the reminder fired; the button stays
   // disabled while the entry is present, and a setTimeout auto-deletes the
@@ -307,6 +278,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
       [slot.slotId]: {
         status: 'taken',
         skipReason: null,
+        skipReasonText: null,
         lateNote: null,
         adminOverride: true,
         createdBy: user.uid,
@@ -397,6 +369,14 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
     // (todaysDoses.length) re-fetched the regimen tree every time a dose
     // was logged, which has no bearing on the active-regimen set.
   }, [household.hId])
+
+  // AK-154 — tId → category for the open skip/late sheet's chip set + the
+  // antibiotic gate. Active treatments only, which is all that can show a dose.
+  const treatmentCategoryById = useMemo(() => {
+    const m: Record<string, TreatmentCategory> = {}
+    for (const tr of allTreatments) m[tr.tId] = tr.category
+    return m
+  }, [allTreatments])
 
   // AK-137 — PRN section state. Derived view (prnRegimens) computed at render
   // time. prnCountByRid holds today's logged-dose count per PRN regimen;
@@ -538,6 +518,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
             next[log.slotId] = {
               status: log.status,
               skipReason: log.skipReason ?? null,
+              skipReasonText: log.skipReasonText ?? null,
               lateNote: log.lateNote ?? null,
               adminOverride: log.adminOverride ?? false,
               createdBy: log.createdBy ?? null,
@@ -583,6 +564,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
             logs[slotId] = {
               status: s.status,
               skipReason: s.skipReason,
+              skipReasonText: s.skipReasonText,
               lateNote: s.lateNote,
               adminOverride: s.adminOverride,
               createdBy: s.createdBy,
@@ -660,50 +642,28 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
     }
   }, [logsBySlot, household.hId])
 
-  function startSkipMode(slotId: string) {
-    setLateModeFor(null)
-    setLateTimeChoice('')
-    setSkipReasonText('')
-    setSkipModeFor(slotId)
-    setLogError('')
-  }
-
-  function startLateMode(slot: DoseSlotDisplay) {
-    setSkipModeFor(null)
-    setSkipReasonText('')
-    const opts = generateLateOptionsForSlot(slot.time)
-    setLateOptions(opts)
-    setLateTimeChoice(opts[0] ?? '')
-    setLateModeFor(slot.slotId)
-    setLogError('')
-  }
-
-  function cancelSkipMode() {
-    setSkipModeFor(null)
-    setSkipReasonText('')
-  }
-
-  function cancelLateMode() {
-    setLateModeFor(null)
-    setLateTimeChoice('')
-  }
-
   // Log a dose with optimistic UI. On failure, revert and show an error.
+  // AK-154 — the admin dashboard's own-dose controls are "mark as taken" only;
+  // skip/late self-logging now lives in the member view's bottom sheet, so this
+  // path only ever writes 'taken'.
   async function handleLogDose(
     slot: DoseSlotDisplay,
     status: DoseStatus,
-    opts: { skipReason?: string | null; lateNote?: string | null } = {},
   ) {
     setLogError('')
     setPendingSlot(slot.slotId)
 
-    const skipReason = opts.skipReason ?? null
-    const lateNote   = opts.lateNote ?? null
-
     // Optimistic
     setLogsBySlot(prev => ({
       ...prev,
-      [slot.slotId]: { status, skipReason, lateNote, adminOverride: false, createdBy: user.uid },
+      [slot.slotId]: {
+        status,
+        skipReason: null,
+        skipReasonText: null,
+        lateNote: null,
+        adminOverride: false,
+        createdBy: user.uid,
+      },
     }))
 
     try {
@@ -717,8 +677,6 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
         doseAmount: slot.doseAmount,
         doseUnit: slot.doseUnit,
         status,
-        skipReason,
-        lateNote,
         createdBy: user.uid,
         scheduleType: slot.scheduleType,
       })
@@ -747,9 +705,137 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
       setLogError('Could not log dose. Please try again.')
     } finally {
       setPendingSlot(null)
-      if (status === 'skipped') cancelSkipMode()
-      if (status === 'late')    cancelLateMode()
     }
+  }
+
+  // AK-154 — Log a skip (with structured reason) or a late take (with the
+  // actual taken-at instant) for the admin's OWN dose, via the bottom sheet.
+  // Mirrors the member card's handler; returns true on success so the caller
+  // can fire the right toast.
+  async function submitSkipLate(
+    slot: DoseSlotDisplay,
+    status: 'skipped' | 'late',
+    opts: {
+      skipReason?: SkipReasonId | null
+      skipReasonText?: string | null
+      takenAt?: Date | null
+    } = {},
+  ): Promise<boolean> {
+    setLogError('')
+    setPendingSlot(slot.slotId)
+    const skipReason = opts.skipReason ?? null
+
+    setLogsBySlot(prev => ({
+      ...prev,
+      [slot.slotId]: {
+        status,
+        skipReason,
+        skipReasonText: opts.skipReasonText ?? null,
+        lateNote: null,
+        adminOverride: false,
+        createdBy: user.uid,
+      },
+    }))
+
+    try {
+      await logDose(household.hId, {
+        tId: slot.treatmentId,
+        rId: slot.regimenId,
+        patientId: slot.patientId,
+        cabinetItemId: slot.cabinetItemId,
+        scheduledDate: todayISTString(),
+        scheduledTime: slot.time,
+        doseAmount: slot.doseAmount,
+        doseUnit: slot.doseUnit,
+        status,
+        skipReason,
+        skipReasonText: opts.skipReasonText ?? null,
+        takenAt: opts.takenAt ?? null,
+        createdBy: user.uid,
+        scheduleType: slot.scheduleType,
+      })
+      if (status === 'late') {
+        setConfirmedSlot(slot.slotId)
+        setConfirmedMessage(pickConfirmMessage())
+        setTimeout(() => {
+          setConfirmedSlot(prev => {
+            if (prev !== slot.slotId) return prev
+            setConfirmedMessage(null)
+            return null
+          })
+        }, 1600)
+      }
+      return true
+    } catch {
+      setLogsBySlot(prev => {
+        const next = { ...prev }
+        delete next[slot.slotId]
+        return next
+      })
+      setLogError('Could not log dose. Please try again.')
+      return false
+    } finally {
+      setPendingSlot(null)
+    }
+  }
+
+  function showActionToast(message: string) {
+    setToastMessage(message)
+    setTimeout(() => setToastMessage(null), 2600)
+  }
+
+  function openSkipSheet(slot: DoseSlotDisplay) {
+    setSheetSlot(slot)
+    setSheetView('reasons')
+    setOtherText('')
+    setLateMode('now')
+    setLateEarlierTime('')
+    setLogError('')
+  }
+
+  function openLateSheet(slot: DoseSlotDisplay) {
+    setSheetSlot(slot)
+    setSheetView('late')
+    setOtherText('')
+    setLateMode('now')
+    setLateEarlierTime('')
+    setLogError('')
+  }
+
+  function closeSheet() {
+    setSheetSlot(null)
+  }
+
+  async function confirmSkip(
+    slot: DoseSlotDisplay,
+    reasonId: SkipReasonId,
+    opts: { text?: string | null } = {},
+  ) {
+    const ok = await submitSkipLate(slot, 'skipped', {
+      skipReason: reasonId,
+      skipReasonText: opts.text ?? null,
+    })
+    closeSheet()
+    if (ok) showActionToast('Dose skipped.')
+  }
+
+  function onChipTap(slot: DoseSlotDisplay, chip: SkipReasonDef) {
+    // Antibiotic friction gate only for clinical reasons on acute courses.
+    if (chip.isClinical && treatmentCategoryById[slot.treatmentId] === 'acute') {
+      setSheetView('antibiotic')
+      return
+    }
+    void confirmSkip(slot, chip.id)
+  }
+
+  async function confirmLate(slot: DoseSlotDisplay) {
+    const takenAt =
+      lateMode === 'now'
+        ? new Date()
+        : new Date(`${todayISTString()}T${lateEarlierTime}:00+05:30`)
+    const ok = await submitSkipLate(slot, 'late', { takenAt })
+    closeSheet()
+    if (ok) showActionToast('Logged as taken (late).')
   }
 
   const NAV_TABS = [
@@ -1011,8 +1097,15 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                               if (isLogged) {
                                                 if (log.status === 'taken')
                                                   detail = isFlexible ? 'Taken today' : `Taken at ${formatTimeFriendly(dose.time)}`
-                                                if (log.status === 'late')    detail = lateDetail(log)
-                                                if (log.status === 'skipped') detail = log.skipReason ? `Skipped — ${log.skipReason}` : 'Skipped'
+                                                if (log.status === 'late')    detail = 'Taken late'
+                                                if (log.status === 'skipped') {
+                                                  // AK-154 — structured reason → label, with the user's
+                                                  // own words appended for the 'Other' bucket.
+                                                  const label = log.skipReason ? SKIP_REASON_LABELS[log.skipReason] : null
+                                                  detail = label
+                                                    ? (log.skipReasonText ? `Skipped — ${label} (${log.skipReasonText})` : `Skipped — ${label}`)
+                                                    : 'Skipped'
+                                                }
                                               }
 
                                               const showReminder =
@@ -1071,6 +1164,9 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
 
                                                   {!isLogged && isAdminsOwnDose && (
                                                     <div className="tr-dose-controls">
+                                                      {/* AK-154 follow-up — the admin's own dose card now
+                                                          renders Taken / Skip / Late like any member's card;
+                                                          Skip & Late open the shared AK-154 bottom sheet. */}
                                                       <button
                                                         type="button"
                                                         className="tr-action tr-action--taken"
@@ -1079,13 +1175,12 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                       >
                                                         <Check size={14} /> Taken
                                                       </button>
-                                                      {/* AK-131 — late mode is meaningless when the slot has
-                                                          no fixed time; hide the button for flexible-daily. */}
+                                                      {/* late take is meaningless without a fixed time. */}
                                                       {!isFlexible && (
                                                         <button
                                                           type="button"
                                                           className="tr-action tr-action--late"
-                                                          onClick={() => startLateMode(dose)}
+                                                          onClick={() => openLateSheet(dose)}
                                                           disabled={isPending}
                                                         >
                                                           <Clock size={14} /> Late
@@ -1094,10 +1189,10 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                       <button
                                                         type="button"
                                                         className="tr-action tr-action--skip"
-                                                        onClick={() => startSkipMode(dose.slotId)}
+                                                        onClick={() => openSkipSheet(dose)}
                                                         disabled={isPending}
                                                       >
-                                                        Skip
+                                                        {treatmentCategoryById[dose.treatmentId] === 'prn' ? 'Not taking today' : 'Skip'}
                                                       </button>
                                                     </div>
                                                   )}
@@ -1393,146 +1488,181 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
 
       </main>
 
-      {/* ── Late modal (centered) ────────────────────────────────── */}
-      {(() => {
-        const slot = lateModeFor ? todaysDoses.find(d => d.slotId === lateModeFor) : null
-        if (!slot) return null
-        const isPending = pendingSlot === slot.slotId
-        const noSlots = lateOptions.length === 0
-        return (
-          <div
-            className="tr-modal-backdrop"
-            onClick={isPending ? undefined : cancelLateMode}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="late-modal-title"
-          >
-            <div className="tr-modal" onClick={e => e.stopPropagation()}>
-              <h3 id="late-modal-title" className="tr-modal-title">When will you take this?</h3>
-              <p className="tr-modal-subtitle">{slot.medicineName} · scheduled {slot.time}</p>
+      {/* ── AK-154 — Skip / Late bottom sheet (admin's own dose) ────────── */}
+      <BottomSheet
+        isOpen={!!sheetSlot}
+        onClose={closeSheet}
+        title={
+          sheetView === 'late'         ? 'Take later'
+          : sheetView === 'antibiotic' ? 'Hold on'
+          : (sheetSlot && treatmentCategoryById[sheetSlot.treatmentId] === 'prn') ? 'Not taking today'
+          :                              'Skip this dose'
+        }
+      >
+        {sheetSlot && (() => {
+          const category: TreatmentCategory =
+            treatmentCategoryById[sheetSlot.treatmentId] || 'chronic'
+          const isPrn = category === 'prn'
+          const dosageForm = stockItems.find(s => s.iId === sheetSlot.cabinetItemId)?.dosageForm ?? undefined
+          const chips = getSkipReasonChips(category, dosageForm ?? undefined)
+          const pending = pendingSlot === sheetSlot.slotId
+          const pastOptions = sheetView === 'late' ? generatePastTimeOptions() : []
+          return (
+            <>
+              <p className="tr-modal-subtitle">{sheetSlot.medicineName}</p>
 
-              {noSlots ? (
+              {sheetView === 'reasons' && (
                 <>
-                  <p className="tr-modal-empty">
-                    No time slots remaining today. You can still mark this as taken now.
-                  </p>
-                  <div className="tr-modal-actions">
+                  {/* Late Take CTA — hidden for PRN. */}
+                  {!isPrn && (
                     <button
                       type="button"
                       className="tr-modal-btn tr-modal-btn--secondary"
-                      onClick={cancelLateMode}
-                      disabled={isPending}
-                    >Cancel</button>
-                    <button
-                      type="button"
-                      className="tr-modal-btn tr-modal-btn--primary"
-                      onClick={() => handleLogDose(slot, 'taken')}
-                      disabled={isPending}
+                      onClick={() => setSheetView('late')}
+                      disabled={pending}
                     >
-                      {isPending ? 'Saving…' : 'Mark as Taken'}
+                      I took it at a different time →
                     </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="tr-time-grid" role="radiogroup" aria-label="Intended time">
-                    {lateOptions.map(opt => (
+                  )}
+
+                  <h4 className="db-section-title">I'm skipping because…</h4>
+                  <div className="tr-time-grid">
+                    {chips.map(chip => (
                       <button
-                        key={opt}
+                        key={chip.id}
                         type="button"
-                        role="radio"
-                        aria-checked={lateTimeChoice === opt}
-                        className={`tr-time-chip${lateTimeChoice === opt ? ' tr-time-chip--active' : ''}`}
-                        onClick={() => setLateTimeChoice(opt)}
+                        className="tr-time-chip"
+                        onClick={() => onChipTap(sheetSlot, chip)}
+                        disabled={pending}
                       >
-                        {formatTimeFriendly(opt)}
+                        {chip.label}
                       </button>
                     ))}
                   </div>
+
+                  <textarea
+                    className="tr-modal-textarea"
+                    rows={2}
+                    maxLength={120}
+                    value={otherText}
+                    onChange={e => setOtherText(e.target.value)}
+                    placeholder="Other reason (optional)…"
+                  />
                   <div className="tr-modal-actions">
                     <button
                       type="button"
-                      className="tr-modal-btn tr-modal-btn--secondary"
-                      onClick={cancelLateMode}
-                      disabled={isPending}
-                    >Cancel</button>
-                    <button
-                      type="button"
                       className="tr-modal-btn tr-modal-btn--primary"
-                      onClick={() => handleLogDose(slot, 'late', {
-                        skipReason: `Taking at ${formatTimeFriendly(lateTimeChoice)}`,
-                      })}
-                      disabled={!lateTimeChoice || isPending}
+                      onClick={() => confirmSkip(sheetSlot, 'other', { text: otherText.trim() })}
+                      disabled={!otherText.trim() || pending}
                     >
-                      {isPending ? 'Saving…' : 'Confirm'}
+                      {pending ? 'Skipping…' : 'Skip'}
                     </button>
                   </div>
                 </>
               )}
-            </div>
-          </div>
-        )
-      })()}
 
-      {/* ── Skip modal (centered) ────────────────────────────────── */}
-      {(() => {
-        const slot = skipModeFor ? todaysDoses.find(d => d.slotId === skipModeFor) : null
-        if (!slot) return null
-        const check = validateSkipReason(skipReasonText)
-        const showError = !check.valid && check.count > 0
-        const isPending = pendingSlot === slot.slotId
-        return (
-          <div
-            className="tr-modal-backdrop"
-            onClick={isPending ? undefined : cancelSkipMode}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="skip-modal-title"
-          >
-            <div className="tr-modal" onClick={e => e.stopPropagation()}>
-              <h3 id="skip-modal-title" className="tr-modal-title">Why are you skipping this dose?</h3>
-              <p className="tr-modal-subtitle">Please describe in your own words</p>
-
-              <textarea
-                className="tr-modal-textarea"
-                rows={3}
-                value={skipReasonText}
-                onChange={e => setSkipReasonText(e.target.value)}
-                placeholder="e.g. Feeling nauseous, doctor advised to pause for today…"
-                aria-invalid={showError}
-                autoFocus
-              />
-              <div className={
-                check.valid       ? 'tr-modal-counter tr-modal-counter--valid'
-                : check.count > 0 ? 'tr-modal-counter tr-modal-counter--invalid'
-                :                   'tr-modal-counter'
-              }>
-                {check.count} / {SKIP_MIN_CHARS}
-              </div>
-              {showError && (
-                <p className="tr-modal-error" role="alert">{SKIP_ERROR}</p>
+              {sheetView === 'antibiotic' && (
+                <>
+                  <div className="md-sheet-warning">
+                    <AlertTriangle size={20} aria-hidden="true" />
+                    <p>
+                      Stopping antibiotics early can let the infection come back
+                      harder to treat.
+                    </p>
+                  </div>
+                  <div className="tr-modal-actions">
+                    <button
+                      type="button"
+                      className="tr-modal-btn tr-modal-btn--primary"
+                      onClick={closeSheet}
+                      disabled={pending}
+                    >
+                      I'll take it now
+                    </button>
+                    <button
+                      type="button"
+                      className="tr-modal-btn tr-modal-btn--secondary"
+                      onClick={() => confirmSkip(sheetSlot, 'feeling_better')}
+                      disabled={pending}
+                    >
+                      {pending ? 'Skipping…' : 'Still skip'}
+                    </button>
+                  </div>
+                </>
               )}
 
-              <div className="tr-modal-actions">
-                <button
-                  type="button"
-                  className="tr-modal-btn tr-modal-btn--secondary"
-                  onClick={cancelSkipMode}
-                  disabled={isPending}
-                >Cancel</button>
-                <button
-                  type="button"
-                  className="tr-modal-btn tr-modal-btn--primary"
-                  onClick={() => handleLogDose(slot, 'skipped', { skipReason: skipReasonText.trim() })}
-                  disabled={!check.valid || isPending}
-                >
-                  {isPending ? 'Skipping…' : 'Confirm Skip'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
+              {sheetView === 'late' && (
+                <>
+                  <h4 className="db-section-title">When did you take it?</h4>
+                  <div className="tr-time-grid" role="radiogroup" aria-label="When taken">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={lateMode === 'now'}
+                      className={`tr-time-chip${lateMode === 'now' ? ' tr-time-chip--active' : ''}`}
+                      onClick={() => setLateMode('now')}
+                    >
+                      Just now
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={lateMode === 'earlier'}
+                      className={`tr-time-chip${lateMode === 'earlier' ? ' tr-time-chip--active' : ''}`}
+                      onClick={() => {
+                        setLateEarlierTime(pastOptions[pastOptions.length - 1] ?? '')
+                        setLateMode('earlier')
+                      }}
+                    >
+                      Earlier today
+                    </button>
+                  </div>
+
+                  {lateMode === 'earlier' && (
+                    pastOptions.length === 0 ? (
+                      <p className="tr-modal-empty">No earlier times today.</p>
+                    ) : (
+                      <div className="tr-time-grid" role="radiogroup" aria-label="Time taken">
+                        {pastOptions.map(opt => (
+                          <button
+                            key={opt}
+                            type="button"
+                            role="radio"
+                            aria-checked={lateEarlierTime === opt}
+                            className={`tr-time-chip${lateEarlierTime === opt ? ' tr-time-chip--active' : ''}`}
+                            onClick={() => setLateEarlierTime(opt)}
+                          >
+                            {formatTimeFriendly(opt)}
+                          </button>
+                        ))}
+                      </div>
+                    )
+                  )}
+
+                  <div className="tr-modal-actions">
+                    <button
+                      type="button"
+                      className="tr-modal-btn tr-modal-btn--secondary"
+                      onClick={closeSheet}
+                      disabled={pending}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="tr-modal-btn tr-modal-btn--primary"
+                      onClick={() => confirmLate(sheetSlot)}
+                      disabled={pending || (lateMode === 'earlier' && !lateEarlierTime)}
+                    >
+                      {pending ? 'Saving…' : 'Confirm'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )
+        })()}
+      </BottomSheet>
 
       {/* ── Notifications panel (admin sees all household notifications) ── */}
       <NotificationsPanel

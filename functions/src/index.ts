@@ -16,6 +16,7 @@ import {
   previousDateInTz,
 } from './util/tzDate'
 import { ENFORCE_APP_CHECK } from './util/enforceAppCheck'
+import { SKIP_REASON_LABELS, CLINICAL_REASON_IDS, REFILL_REASON_IDS } from './skipReasons'
 
 // MC-004 — Gemini API proxy. Re-exported so deploy picks it up.
 export { geminiProxy } from './geminiProxy'
@@ -1348,6 +1349,8 @@ interface TSSlot {
   status: 'taken' | 'late' | 'skipped' | 'missed' | 'pending'
   loggedAt: FirebaseFirestore.Timestamp | null
   skipReason: string | null
+  // AK-154 — free text for skipReason === 'other'; mirrored from the log.
+  skipReasonText: string | null
   lateNote: string | null
   adminOverride: boolean
   createdBy: string | null
@@ -1525,6 +1528,7 @@ async function buildTodaySummaryForHousehold(
           status: 'pending',
           loggedAt: null,
           skipReason: null,
+          skipReasonText: null,
           lateNote: null,
           adminOverride: false,
           createdBy: null,
@@ -1574,6 +1578,7 @@ async function buildTodaySummaryForHousehold(
           status: 'pending',
           loggedAt: null,
           skipReason: null,
+          skipReasonText: null,
           lateNote: null,
           adminOverride: false,
           createdBy: null,
@@ -1593,6 +1598,7 @@ async function buildTodaySummaryForHousehold(
         patientId?: string
         status?: TSSlot['status']
         skipReason?: string | null
+        skipReasonText?: string | null
         lateNote?: string | null
         adminOverride?: boolean
         createdBy?: string | null
@@ -1610,6 +1616,7 @@ async function buildTodaySummaryForHousehold(
       slot.status = (log.status as TSSlot['status']) ?? 'pending'
       slot.loggedAt = log.createdAt ?? null
       slot.skipReason = log.skipReason ?? null
+      slot.skipReasonText = log.skipReasonText ?? null
       slot.lateNote = log.lateNote ?? null
       slot.adminOverride = log.adminOverride ?? false
       slot.createdBy = log.createdBy ?? null
@@ -1664,6 +1671,160 @@ async function buildTodaySummaryForHousehold(
   })
 }
 
+// AK-154 — IST hour:minute formatter for the late-dose push copy.
+function formatISTTimeOfDay(d: Date): string {
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(d)
+}
+
+// AK-154 — Fire a caregiver/admin push when a member skips (non-PRN) or logs a
+// late dose, then stamp caregiverNotifiedAt on the log. The stamp re-triggers
+// onLogWritten; the guard below sees the (truthy) timestamp and returns, so we
+// never double-send or loop. PRN skips and taken/missed/pending writes never
+// reach the send path. Best-effort: a failed push must not throw.
+async function notifyCaregiverOnLog(
+  hId: string,
+  tId: string,
+  slotId: string,
+  after: FirebaseFirestore.DocumentData,
+): Promise<void> {
+  const status = after.status as string | undefined
+  if (status !== 'skipped' && status !== 'late') return
+  // Re-fire from our own caregiverNotifiedAt stamp — stop here.
+  if (after.caregiverNotifiedAt) return
+
+  const patientId = after.patientId as string | undefined
+  if (!patientId) return
+
+  const tSnap = await db.doc(`households/${hId}/treatments/${tId}`).get()
+  const treatment = tSnap.data() as { category?: string; memberName?: string } | undefined
+  const category = treatment?.category
+  const patientName = treatment?.memberName?.trim() || 'A family member'
+
+  // PRN skips are silent to caregivers ("not taking today" is expected).
+  if (status === 'skipped' && category === 'prn') return
+
+  // Medicine name from the regimen (the log doc doesn't denormalise it).
+  const rId = after.rId as string | undefined
+  let medicineName = 'their medicine'
+  if (rId) {
+    const rSnap = await db.doc(`households/${hId}/treatments/${tId}/regimens/${rId}`).get()
+    const dn = rSnap.data()?.displayName as string | undefined
+    if (dn && dn.trim()) medicineName = dn.trim()
+  }
+
+  let title: string
+  let body: string
+  let highPriority = false
+  if (status === 'late') {
+    const takenAt = after.takenAt as FirebaseFirestore.Timestamp | undefined
+    const when = takenAt ? formatISTTimeOfDay(takenAt.toDate()) : 'earlier today'
+    title = `${patientName} logged a late dose`
+    body = `${medicineName} — taken at ${when}.`
+  } else {
+    const reasonId = (after.skipReason as string | null | undefined) ?? null
+    const reasonLabel = reasonId ? (SKIP_REASON_LABELS[reasonId] ?? null) : null
+    if (reasonId && CLINICAL_REASON_IDS.has(reasonId)) {
+      title = `⚠️ ${patientName} skipped ${medicineName}`
+      body = reasonLabel ?? 'No reason given.'
+      highPriority = true
+    } else if (reasonId && REFILL_REASON_IDS.has(reasonId)) {
+      title = `${patientName} is out of ${medicineName}`
+      body = 'Tap to request a refill.'
+    } else {
+      title = `${patientName} skipped ${medicineName}`
+      body = reasonLabel ?? 'No reason given.'
+    }
+  }
+
+  const hSnap = await db.doc(`households/${hId}`).get()
+  const household = hSnap.data() as
+    { adminIds?: string[]; primaryAdminId?: string } | undefined
+  const adminIds = household?.adminIds ?? []
+  const primaryAdminId = household?.primaryAdminId
+  const createdBy = after.createdBy as string | undefined
+  const dataType = status === 'late' ? 'late_dose' : 'dose_skipped'
+
+  // AK-154 follow-up — when the primary admin logs (or skips) their OWN dose,
+  // don't push a notification back at themselves; route to every OTHER admin
+  // instead. All other logs (members, co-admins acting on a member) notify the
+  // full admin set as before.
+  const isAdminLoggingOwnDose =
+    !!primaryAdminId && patientId === primaryAdminId && createdBy === patientId
+  const recipientIds = isAdminLoggingOwnDose
+    ? adminIds.filter(uid => uid !== patientId)
+    : adminIds
+
+  if (recipientIds.length === 0) {
+    // Admin logged their own dose and is the sole admin — no one to notify.
+    if (isAdminLoggingOwnDose) {
+      console.warn(
+        `notifyCaregiverOnLog: ${hId} — admin logged own dose but has no co-admin to notify`,
+      )
+    }
+    return
+  }
+
+  let sent = 0
+  for (const adminId of recipientIds) {
+    const adminSnap = await db.doc(`users/${adminId}`).get()
+    const adminData = adminSnap.data()
+    if (!adminData?.fcmToken) continue
+    if (adminData.pushNotificationsEnabled === false) continue
+    try {
+      await messaging.send({
+        token: adminData.fcmToken as string,
+        notification: { title, body },
+        data: { type: dataType, householdId: hId, patientId, slotId },
+        android: {
+          priority: highPriority ? 'high' : 'normal',
+          notification: {
+            channelId: 'dose_reminders',
+            color: '#5DC1C8',
+            icon: 'ic_notification',
+          },
+        },
+        apns: {
+          headers: { 'apns-priority': highPriority ? '10' : '5' },
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+              mutableContent: true,
+              'interruption-level': highPriority ? 'critical' : 'active',
+            },
+          },
+        },
+      })
+      sent++
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code
+      if (code === 'messaging/registration-token-not-registered') {
+        await db.doc(`users/${adminId}`).update({ fcmToken: FieldValue.delete() })
+      }
+      // Otherwise swallow — one bad token shouldn't block the rest.
+    }
+  }
+
+  // AK-154 follow-up — co-admin(s) exist but none had a registered FCM token.
+  // Surface it for diagnostics; still return cleanly (never throw).
+  if (isAdminLoggingOwnDose && sent === 0) {
+    console.warn(
+      `notifyCaregiverOnLog: ${hId} — admin logged own dose but no co-admin has a registered FCM token`,
+    )
+  }
+
+  // Stamp so the re-triggered onLogWritten bails at the guard above. Done even
+  // with no tokens so this log's notification is never reprocessed.
+  await db.doc(`households/${hId}/treatments/${tId}/logs/${slotId}`).update({
+    caregiverNotifiedAt: Timestamp.now(),
+  })
+}
+
 // Trigger A: log doc written → update its slot in todaySummary atomically
 // (read-modify-write transaction so concurrent writes don't lose updates).
 export const onLogWritten = onDocumentWritten(
@@ -1684,6 +1845,10 @@ export const onLogWritten = onDocumentWritten(
     // Per spec — only mutate today's summary; yesterday's late logs don't
     // touch yesterday's archived doc.
     if (slotDateIST !== todayIST) return
+
+    // AK-154 — caregiver skip/late push. Runs before the summary read/build so
+    // it still fires on the household's very first log of the day.
+    await notifyCaregiverOnLog(hId, event.params.tId, slotId, after)
 
     const summaryRef = db.doc(`households/${hId}/todaySummary/${todayIST}`)
     const summarySnap = await summaryRef.get()
@@ -1712,6 +1877,7 @@ export const onLogWritten = onDocumentWritten(
         status: (after.status as TSSlot['status']) ?? 'pending',
         loggedAt: (after.createdAt as FirebaseFirestore.Timestamp | undefined) ?? null,
         skipReason: (after.skipReason as string | null | undefined) ?? null,
+        skipReasonText: (after.skipReasonText as string | null | undefined) ?? null,
         lateNote: (after.lateNote as string | null | undefined) ?? null,
         adminOverride: (after.adminOverride as boolean | undefined) ?? false,
         createdBy: (after.createdBy as string | null | undefined) ?? null,
