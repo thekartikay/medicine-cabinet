@@ -61,6 +61,45 @@ const DEFS: Record<SkipReasonId, SkipReasonDef> = {
   other:              { id: 'other',              label: SKIP_REASON_LABELS.other,              category: 'other' },
 }
 
+// AK-155 — Three-tier urgency for a skip reason. Drives FCM routing
+// (functions) and the red/amber/gray colour coding on the dashboard:
+//   🔴 clinical      — high-priority FCM, danger red
+//   🟡 informational — normal FCM, warning amber
+//   🟢 benign        — no FCM, neutral gray
+export type SkipUrgencyTier = 'clinical' | 'informational' | 'benign'
+
+const SKIP_URGENCY: Record<SkipReasonId, SkipUrgencyTier> = {
+  // 🔴 Clinical — high-priority FCM
+  feeling_better:       'clinical',
+  adverse_reaction:     'clinical',
+  blood_sugar_low:      'clinical',
+  side_effects:         'clinical',
+  // 🟡 Informational — normal FCM
+  ran_out:              'informational',
+  inhaler_empty:        'informational',
+  doctor_changed:       'informational',
+  injection_site_sore:  'informational',
+  device_issue:         'informational',
+  fasting:              'informational',
+  away_from_supplies:   'informational',
+  // 🟢 Benign — no FCM
+  traveling:            'benign',
+  forgot:               'benign',
+  busy:                 'benign',
+  not_home:             'benign',
+  no_symptoms:          'benign',
+  pain_resolved:        'benign',
+  took_alternative:     'benign',
+  at_daily_limit:       'benign',
+  festival:             'benign',
+  other:                'benign',
+}
+
+export function getSkipUrgency(id: SkipReasonId | null | undefined): SkipUrgencyTier {
+  if (!id) return 'benign'
+  return SKIP_URGENCY[id] ?? 'benign'
+}
+
 const chips = (...ids: SkipReasonId[]): SkipReasonDef[] => ids.map(id => DEFS[id])
 
 const CHRONIC_ORAL    = chips('traveling', 'forgot', 'side_effects', 'ran_out', 'fasting')

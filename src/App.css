@@ -2346,6 +2346,54 @@
   margin: 8px 0 0 62px;
 }
 
+/* AK-155 — skip-reason urgency colour coding (reason text) */
+.tr-log-reason--clinical      { color: #E24B4A; }   /* danger red */
+.tr-log-reason--informational { color: #EF9F27; }   /* warning amber */
+.tr-log-reason--benign        { color: #6b7280; }   /* unchanged neutral gray */
+
+/* AK-155 — skip-reason urgency colour coding (status badge). skip-benign
+   intentionally has no rule so the neutral .tr-log-badge--skipped stays. */
+.tr-log-badge--skip-clinical {
+  background: rgba(226, 75, 74, 0.12);
+  color: #E24B4A;
+  border-color: rgba(226, 75, 74, 0.4);
+}
+.tr-log-badge--skip-informational {
+  background: rgba(239, 159, 39, 0.12);
+  color: #B87A00;
+  border-color: rgba(239, 159, 39, 0.4);
+}
+
+/* AK-155 — insufficient-stock notice + refill/restock link (member + admin
+   dose cards) and the greyed-out "Taken" button. */
+.dose-stock-block {
+  margin: 6px 0 2px;
+}
+.dose-stock-warning {
+  color: #EF9F27;
+  font-size: 12px;
+  margin: 0;
+}
+.dose-restock-link {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #EF9F27;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dose-restock-link:hover {
+  text-decoration: underline;
+}
+.dose-btn--blocked {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* Action button row */
 .tr-dose-controls {
   display: flex;

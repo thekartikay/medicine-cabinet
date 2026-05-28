@@ -6,7 +6,7 @@ import {
   getHouseholdMembers,
 } from '../services/firestoreService'
 import { todayISTString } from '../lib/paths'
-import { SKIP_REASON_LABELS } from '../lib/skipReasons'
+import { getSkipUrgency, SKIP_REASON_LABELS } from '../lib/skipReasons'
 import type { DoseLog, HouseholdMember, Regimen, SkipReasonId, Treatment } from '../types'
 
 interface Props {
@@ -293,7 +293,7 @@ export function DoseHistory({ hId, onBack, filterUid }: Props) {
                             )}
                           </span>
                         </div>
-                        <span className={`tr-log-badge tr-log-badge--${e.status}`}>
+                        <span className={`tr-log-badge tr-log-badge--${e.status}${e.status === 'skipped' ? ` tr-log-badge--skip-${getSkipUrgency(e.skipReason)}` : ''}`}>
                           {e.status === 'taken'   && <Check size={12} />}
                           {e.status === 'late'    && <Check size={12} />}
                           {e.status === 'skipped' && <Minus size={12} />}
@@ -303,7 +303,7 @@ export function DoseHistory({ hId, onBack, filterUid }: Props) {
                         </span>
                       </div>
                       {e.status === 'skipped' && e.skipReason && (
-                        <p className="tr-log-reason">
+                        <p className={`tr-log-reason tr-log-reason--${getSkipUrgency(e.skipReason)}`}>
                           {SKIP_REASON_LABELS[e.skipReason]}
                           {e.skipReasonText ? ` — ${e.skipReasonText}` : ''}
                         </p>

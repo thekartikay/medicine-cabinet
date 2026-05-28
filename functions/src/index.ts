@@ -16,7 +16,7 @@ import {
   previousDateInTz,
 } from './util/tzDate'
 import { ENFORCE_APP_CHECK } from './util/enforceAppCheck'
-import { SKIP_REASON_LABELS, CLINICAL_REASON_IDS, REFILL_REASON_IDS } from './skipReasons'
+import { SKIP_REASON_LABELS, getSkipUrgency } from './skipReasons'
 
 // MC-004 — Gemini API proxy. Re-exported so deploy picks it up.
 export { geminiProxy } from './geminiProxy'
@@ -1681,6 +1681,36 @@ function formatISTTimeOfDay(d: Date): string {
   }).format(d)
 }
 
+// AK-155 — Best-effort: zero a cabinet item's stock when a dose is skipped for
+// "ran out" / "inhaler empty". Conditional write in a transaction so we only
+// touch items that still show stock; never throws (warn + swallow) so it can't
+// block the caregiver FCM. Items live in the household's default cabinet
+// (mirrors getDefaultCabinetId = `${hId}-default` in src/lib/paths.ts).
+async function zeroCabinetItemStock(
+  hId: string,
+  cabinetItemId: string | undefined,
+): Promise<void> {
+  if (!cabinetItemId) return
+  const itemRef = db.doc(`households/${hId}/cabinets/${hId}-default/items/${cabinetItemId}`)
+  try {
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(itemRef)
+      if (!snap.exists) return
+      const qty = (snap.data()?.quantityOnHand as number | undefined) ?? 0
+      if (qty > 0) {
+        tx.update(itemRef, {
+          quantityOnHand: 0,
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+      }
+    })
+  } catch (err: unknown) {
+    console.warn(
+      `zeroCabinetItemStock: ${hId} — failed to zero ${cabinetItemId}: ${String(err)}`,
+    )
+  }
+}
+
 // AK-154 — Fire a caregiver/admin push when a member skips (non-PRN) or logs a
 // late dose, then stamp caregiverNotifiedAt on the log. The stamp re-triggers
 // onLogWritten; the guard below sees the (truthy) timestamp and returns, so we
@@ -1726,18 +1756,36 @@ async function notifyCaregiverOnLog(
     title = `${patientName} logged a late dose`
     body = `${medicineName} — taken at ${when}.`
   } else {
+    // AK-155 — three-tier routing by skip-reason urgency.
     const reasonId = (after.skipReason as string | null | undefined) ?? null
     const reasonLabel = reasonId ? (SKIP_REASON_LABELS[reasonId] ?? null) : null
-    if (reasonId && CLINICAL_REASON_IDS.has(reasonId)) {
+    const tier = getSkipUrgency(reasonId)
+
+    // 🟢 Benign skips are silent — no push, and we deliberately do NOT stamp
+    // caregiverNotifiedAt (nothing was sent, so the log stays "unnotified").
+    if (tier === 'benign') return
+
+    if (tier === 'clinical') {
+      // 🔴 high-priority / critical
       title = `⚠️ ${patientName} skipped ${medicineName}`
-      body = reasonLabel ?? 'No reason given.'
+      body = `${reasonLabel ?? 'Dose skipped'} — check in when you can`
       highPriority = true
-    } else if (reasonId && REFILL_REASON_IDS.has(reasonId)) {
-      title = `${patientName} is out of ${medicineName}`
-      body = 'Tap to request a refill.'
     } else {
-      title = `${patientName} skipped ${medicineName}`
-      body = reasonLabel ?? 'No reason given.'
+      // 🟡 informational — normal priority
+      if (reasonId === 'ran_out' || reasonId === 'inhaler_empty') {
+        title = `${patientName} is out of ${medicineName}`
+        body = 'Tap to request a refill.'
+      } else {
+        title = `${patientName} skipped ${medicineName}`
+        body = reasonLabel ?? 'No reason given.'
+      }
+    }
+
+    // AK-155 Step 3 — "ran out" / "inhaler empty" zeroes the cabinet item's
+    // stock so the existing low-stock alert pipeline (onCabinetItemWritten →
+    // stockAlerts) picks it up. Best-effort: a failure must not block the FCM.
+    if (reasonId === 'ran_out' || reasonId === 'inhaler_empty') {
+      await zeroCabinetItemStock(hId, after.cabinetItemId as string | undefined)
     }
   }
 

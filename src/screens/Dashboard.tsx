@@ -9,7 +9,7 @@ import {
 import { auth, functions } from '../lib/firebase'
 import { todayISTString, getDefaultCabinetId } from '../lib/paths'
 import { CABINET_QUERY_ENABLED } from '../lib/featureFlags'
-import { getSkipReasonChips, SKIP_REASON_LABELS } from '../lib/skipReasons'
+import { getSkipReasonChips, getSkipUrgency, SKIP_REASON_LABELS } from '../lib/skipReasons'
 import { CabinetQueryFAB } from '../components/CabinetQueryFAB'
 import { CabinetQueryModal } from '../components/CabinetQueryModal'
 import BottomSheet from '../components/BottomSheet'
@@ -1093,6 +1093,13 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                 null
 
                                               const isFlexible = dose.scheduleType === 'flexible-daily'
+                                              // AK-155 — render-time stock check: block "Taken" when the
+                                              // linked cabinet item can't cover this dose. Lookup against the
+                                              // in-memory stockItems (same source as the OOS badge); no fetch.
+                                              const stockItemForDose = stockItems.find(s => s.iId === dose.cabinetItemId)
+                                              const stockInsufficient = stockItemForDose
+                                                ? stockItemForDose.quantityOnHand < dose.doseAmount
+                                                : false
                                               let detail: string | null = null
                                               if (isLogged) {
                                                 if (log.status === 'taken')
@@ -1142,7 +1149,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                       </span>
                                                     </div>
                                                     {kind && (
-                                                      <span className={`tr-log-badge tr-log-badge--${kind}`}>
+                                                      <span className={`tr-log-badge tr-log-badge--${kind}${kind === 'skipped' ? ` tr-log-badge--skip-${getSkipUrgency(log!.skipReason)}` : ''}`}>
                                                         {kind === 'taken'   && <Check size={12} />}
                                                         {kind === 'late'    && <Check size={12} />}
                                                         {kind === 'skipped' && <Minus size={12} />}
@@ -1162,6 +1169,21 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                     )}
                                                   </div>
 
+                                                  {/* AK-155 — insufficient stock blocks "Taken" only; skip /
+                                                      late stay open. Visual-only, no Firestore write. */}
+                                                  {!isLogged && isAdminsOwnDose && stockInsufficient && (
+                                                    <div className="dose-stock-block">
+                                                      <p className="dose-stock-warning">Not enough stock to log as taken</p>
+                                                      <button
+                                                        type="button"
+                                                        className="dose-restock-link"
+                                                        onClick={() => visitTab('cabinet')}
+                                                      >
+                                                        Request restock →
+                                                      </button>
+                                                    </div>
+                                                  )}
+
                                                   {!isLogged && isAdminsOwnDose && (
                                                     <div className="tr-dose-controls">
                                                       {/* AK-154 follow-up — the admin's own dose card now
@@ -1169,9 +1191,9 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                           Skip & Late open the shared AK-154 bottom sheet. */}
                                                       <button
                                                         type="button"
-                                                        className="tr-action tr-action--taken"
+                                                        className={`tr-action tr-action--taken${stockInsufficient ? ' dose-btn--blocked' : ''}`}
                                                         onClick={() => handleLogDose(dose, 'taken')}
-                                                        disabled={isPending}
+                                                        disabled={isPending || stockInsufficient}
                                                       >
                                                         <Check size={14} /> Taken
                                                       </button>
@@ -1198,7 +1220,20 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
                                                   )}
 
                                                   {detail && (
-                                                    <p className={`tr-log-reason tr-log-reason--${log!.status}`}>{detail}</p>
+                                                    <p className={`tr-log-reason tr-log-reason--${getSkipUrgency(log!.skipReason)}`}>{detail}</p>
+                                                  )}
+
+                                                  {/* AK-155 — refill CTA on a skipped "ran out" / "inhaler empty"
+                                                      dose; routes to the Cabinet tab (admin restock surface). */}
+                                                  {isLogged && log!.status === 'skipped'
+                                                    && (log!.skipReason === 'ran_out' || log!.skipReason === 'inhaler_empty') && (
+                                                    <button
+                                                      type="button"
+                                                      className="dose-restock-link"
+                                                      onClick={() => visitTab('cabinet')}
+                                                    >
+                                                      → Request refill
+                                                    </button>
                                                   )}
 
                                                   {/* AK-132 — Ephemeral affirmation under the just-confirmed

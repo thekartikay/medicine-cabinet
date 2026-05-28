@@ -27,15 +27,40 @@ export const SKIP_REASON_LABELS: Record<string, string> = {
   other: 'Other',
 }
 
-// Clinical skips → immediate high-priority / critical FCM to admins.
-export const CLINICAL_REASON_IDS = new Set<string>([
-  'feeling_better',
-  'blood_sugar_low',
-  'adverse_reaction',
-])
+// AK-155 — Three-tier urgency for a skip reason (mirrors src/lib/skipReasons.ts):
+//   🔴 clinical      — high-priority / critical FCM
+//   🟡 informational — normal FCM
+//   🟢 benign        — no FCM at all
+export type SkipUrgencyTier = 'clinical' | 'informational' | 'benign'
 
-// Out-of-supply skips → refill-prompt FCM copy.
-export const REFILL_REASON_IDS = new Set<string>([
-  'ran_out',
-  'inhaler_empty',
-])
+const SKIP_URGENCY: Record<string, SkipUrgencyTier> = {
+  // 🔴 Clinical
+  feeling_better: 'clinical',
+  adverse_reaction: 'clinical',
+  blood_sugar_low: 'clinical',
+  side_effects: 'clinical',
+  // 🟡 Informational
+  ran_out: 'informational',
+  inhaler_empty: 'informational',
+  doctor_changed: 'informational',
+  injection_site_sore: 'informational',
+  device_issue: 'informational',
+  fasting: 'informational',
+  away_from_supplies: 'informational',
+  // 🟢 Benign
+  traveling: 'benign',
+  forgot: 'benign',
+  busy: 'benign',
+  not_home: 'benign',
+  no_symptoms: 'benign',
+  pain_resolved: 'benign',
+  took_alternative: 'benign',
+  at_daily_limit: 'benign',
+  festival: 'benign',
+  other: 'benign',
+}
+
+export function getSkipUrgency(id: string | null | undefined): SkipUrgencyTier {
+  if (!id) return 'benign'
+  return SKIP_URGENCY[id] ?? 'benign'
+}

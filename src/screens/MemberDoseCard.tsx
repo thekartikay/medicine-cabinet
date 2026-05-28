@@ -595,6 +595,12 @@ export function MemberDoseCard({ user, household }: Props) {
         {nextPending ? (() => {
           const isFlexible = nextPending.scheduleType === 'flexible-daily'
           const isPrn = treatmentCategoryById[nextPending.treatmentId] === 'prn'
+          // AK-155 — render-time stock check. quantityOnHand isn't on the slot;
+          // look it up from the cabinetItems already loaded for the low-stock
+          // section. Block "Taken" when stock can't cover the dose; skip/late
+          // stay open. No Firestore write — purely visual.
+          const stockItem = cabinetItems.find(i => i.iId === nextPending.cabinetItemId)
+          const stockInsufficient = stockItem ? stockItem.quantityOnHand < nextPending.doseAmount : false
           return (
           <div
             className={`md-dose-card${confirmedSlot === nextPending.slotId ? ' md-dose-card--just-confirmed' : ''}`}
@@ -616,12 +622,25 @@ export function MemberDoseCard({ user, household }: Props) {
               )}
             </div>
 
+            {stockInsufficient && (
+              <div className="dose-stock-block">
+                <p className="dose-stock-warning">Not enough stock to log as taken</p>
+                <button
+                  type="button"
+                  className="dose-restock-link"
+                  onClick={() => stockItem && handleRestockRequest(stockItem)}
+                >
+                  Request restock →
+                </button>
+              </div>
+            )}
+
             <div className="md-actions">
               <button
                 type="button"
-                className="md-btn md-btn-primary"
+                className={`md-btn md-btn-primary${stockInsufficient ? ' dose-btn--blocked' : ''}`}
                 onClick={() => handleLog(nextPending, 'taken')}
-                disabled={pendingSlot === nextPending.slotId}
+                disabled={pendingSlot === nextPending.slotId || stockInsufficient}
               >
                 <Check size={20} />
                 <span>{t('member.markAsTaken')}</span>
