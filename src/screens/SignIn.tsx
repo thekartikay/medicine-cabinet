@@ -75,6 +75,21 @@ export function SignIn() {
   const canResend = resendCountdown === 0
   const isLockedOut = lockoutCountdown > 0
 
+  // AK-165 — Auto-submit when the user has typed 6 digits. The Verify button
+  // stays as a fallback (e.g. user pastes < 6 digits and finishes manually).
+  // Guarded against re-fires during loading / lockout / missing confirmation.
+  useEffect(() => {
+    if (otp.length !== 6) return
+    if (loading) return
+    if (isLockedOut) return
+    if (!confirmationRef.current) return
+    void handleVerifyOtp()
+    // handleVerifyOtp is recreated each render; including it would re-fire
+    // the effect on every keystroke. Triggering on otp/loading/lockout is
+    // the correct dependency set for "user just hit 6 digits".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otp, loading, isLockedOut])
+
   function clearAuthError() {
     setAuthError(null)
   }
@@ -260,6 +275,11 @@ export function SignIn() {
               onClick={handleSendOtp}
               disabled={loading || localPhone.replace(/\D/g, '').length < (dialCode === '+91' ? 10 : 7)}
             >
+              {/* AK-165 — real spinner while the reCAPTCHA + signInWithPhoneNumber
+                  round-trip runs. Previously just a label change ("Sending…");
+                  the spinner gives unambiguous visual feedback that work is in
+                  progress (Rajan was confusing the label tweak with a no-op tap). */}
+              {loading && <span className="si-btn-spinner" aria-hidden="true" />}
               {loading ? 'Sending…' : 'Send code'}
             </button>
             <button
@@ -303,6 +323,10 @@ export function SignIn() {
                   onClick={handleVerifyOtp}
                   disabled={loading || otp.length < 6}
                 >
+                  {/* AK-165 — mirror the Send-button spinner. Verification now
+                      auto-fires on the 6th digit with no button tap, so the
+                      spinner is the only clear signal that work is happening. */}
+                  {loading && <span className="si-btn-spinner" aria-hidden="true" />}
                   {loading ? 'Verifying…' : 'Verify'}
                 </button>
               </>

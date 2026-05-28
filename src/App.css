@@ -16,6 +16,20 @@
   animation: spin 0.7s linear infinite;
 }
 
+/* AK-165 — small in-button spinner. Inherits the button's text colour via
+   currentColor so it works on every variant (light/dark/brand). */
+.si-btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
