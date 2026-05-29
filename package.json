@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "test:unit": "vitest run",
     "test:rules": "mocha tests/firestore.rules.test.ts",
     "eval:cabinet": "tsx scripts/evalCabinetQuery.ts",
     "setup:eval-user": "tsx scripts/seedEvalTestUser.ts"
@@ -44,12 +45,14 @@
     "eslint": "^10.2.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
+    "fake-indexeddb": "^6.2.5",
     "firebase-admin": "^13.8.0",
     "globals": "^17.5.0",
     "mocha": "^11.7.5",
     "tsx": "^4.21.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
-    "vite": "^8.0.10"
+    "vite": "^8.0.10",
+    "vitest": "^4.1.7"
   }
 }

@@ -207,27 +207,27 @@ export function Addresses({ hId, onBack }: Props) {
           No saved addresses yet.
         </p>
       ) : (
-        <ul className="ad-list">
+        <ul className="addr-list">
           {addresses.map(a => (
-            <li key={a.addressId} className="ad-card db-card">
-              <div className="ad-card-header">
-                <span className="ad-card-label">{a.label}</span>
+            <li key={a.addressId} className="addr-card db-card">
+              <div className="addr-card-header">
+                <span className="addr-card-label">{a.label}</span>
                 {a.isDefault && (
-                  <span className="ad-default-badge">Default</span>
+                  <span className="addr-default-badge">Default</span>
                 )}
               </div>
-              <div className="ad-card-recipient">
+              <div className="addr-card-recipient">
                 {a.recipientName} · {a.recipientPhone}
               </div>
-              <div className="ad-card-address">{a.formattedAddress}</div>
+              <div className="addr-card-address">{a.formattedAddress}</div>
               {a.landmark && (
-                <div className="ad-card-landmark">Near {a.landmark}</div>
+                <div className="addr-card-landmark">Near {a.landmark}</div>
               )}
-              <div className="ad-card-actions">
+              <div className="addr-card-actions">
                 {!a.isDefault && (
                   <button
                     type="button"
-                    className="ad-card-action"
+                    className="addr-card-action"
                     onClick={() => handleSetDefault(a.addressId)}
                     aria-label={`Set ${a.label} as default`}
                   >
@@ -236,7 +236,7 @@ export function Addresses({ hId, onBack }: Props) {
                 )}
                 <button
                   type="button"
-                  className="ad-card-action"
+                  className="addr-card-action"
                   onClick={() => openEditForm(a)}
                   aria-label={`Edit ${a.label}`}
                 >
@@ -244,7 +244,7 @@ export function Addresses({ hId, onBack }: Props) {
                 </button>
                 <button
                   type="button"
-                  className="ad-card-action ad-card-action--danger"
+                  className="addr-card-action addr-card-action--danger"
                   onClick={() => setPendingDelete(a)}
                   aria-label={`Delete ${a.label}`}
                 >
@@ -566,9 +566,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
       {!isEdit && (
         <>
           <div className="cb-field" style={{ marginBottom: 8 }}>
-            <label className="cb-label" htmlFor="ad-search">Search for the address</label>
+            <label className="cb-label" htmlFor="addr-search">Search for the address</label>
             <input
-              id="ad-search"
+              id="addr-search"
               ref={searchInputRef}
               type="text"
               className="cb-input"
@@ -579,7 +579,7 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
 
           {mapError && <p className="cb-form-error" role="alert">{mapError}</p>}
 
-          <div ref={mapContainerRef} className="ad-map" />
+          <div ref={mapContainerRef} className="addr-map" />
         </>
       )}
 
@@ -591,9 +591,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
 
       <div className="cb-form">
         <div className="cb-field">
-          <label className="cb-label" htmlFor="ad-house">House / Flat number</label>
+          <label className="cb-label" htmlFor="addr-house">House / Flat number</label>
           <input
-            id="ad-house"
+            id="addr-house"
             type="text"
             className="cb-input"
             value={form.houseNumber}
@@ -604,9 +604,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
         </div>
 
         <div className="cb-field">
-          <label className="cb-label" htmlFor="ad-apt">Apartment / Society name</label>
+          <label className="cb-label" htmlFor="addr-apt">Apartment / Society name</label>
           <input
-            id="ad-apt"
+            id="addr-apt"
             type="text"
             className="cb-input"
             value={form.apartmentName}
@@ -616,9 +616,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
         </div>
 
         <div className="cb-field">
-          <label className="cb-label" htmlFor="ad-area">Area / Locality</label>
+          <label className="cb-label" htmlFor="addr-area">Area / Locality</label>
           <input
-            id="ad-area"
+            id="addr-area"
             type="text"
             className="cb-input"
             value={form.area}
@@ -629,9 +629,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
 
         <div className="cb-field-row">
           <div className="cb-field">
-            <label className="cb-label" htmlFor="ad-city">City</label>
+            <label className="cb-label" htmlFor="addr-city">City</label>
             <input
-              id="ad-city"
+              id="addr-city"
               type="text"
               className="cb-input"
               value={form.city}
@@ -640,9 +640,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
             />
           </div>
           <div className="cb-field">
-            <label className="cb-label" htmlFor="ad-state">State</label>
+            <label className="cb-label" htmlFor="addr-state">State</label>
             <input
-              id="ad-state"
+              id="addr-state"
               type="text"
               className="cb-input"
               value={form.state}
@@ -654,9 +654,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
 
         <div className="cb-field-row">
           <div className="cb-field">
-            <label className="cb-label" htmlFor="ad-pin">Pincode</label>
+            <label className="cb-label" htmlFor="addr-pin">Pincode</label>
             <input
-              id="ad-pin"
+              id="addr-pin"
               type="text"
               className="cb-input"
               inputMode="numeric"
@@ -667,9 +667,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
             />
           </div>
           <div className="cb-field">
-            <label className="cb-label" htmlFor="ad-country">Country</label>
+            <label className="cb-label" htmlFor="addr-country">Country</label>
             <input
-              id="ad-country"
+              id="addr-country"
               type="text"
               className="cb-input cb-input--readonly"
               value={form.country}
@@ -680,9 +680,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
         </div>
 
         <div className="cb-field">
-          <label className="cb-label" htmlFor="ad-landmark">Landmark (optional)</label>
+          <label className="cb-label" htmlFor="addr-landmark">Landmark (optional)</label>
           <input
-            id="ad-landmark"
+            id="addr-landmark"
             type="text"
             className="cb-input"
             value={form.landmark}
@@ -695,9 +695,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
         <h3 className="st-section-title" style={{ marginTop: 8 }}>Recipient</h3>
 
         <div className="cb-field">
-          <label className="cb-label" htmlFor="ad-rec-name">Name</label>
+          <label className="cb-label" htmlFor="addr-rec-name">Name</label>
           <input
-            id="ad-rec-name"
+            id="addr-rec-name"
             type="text"
             className="cb-input"
             value={form.recipientName}
@@ -708,7 +708,7 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
         </div>
 
         <div className="cb-field">
-          <label className="cb-label" htmlFor="ad-rec-phone">Phone</label>
+          <label className="cb-label" htmlFor="addr-rec-phone">Phone</label>
           <div style={{ display: 'flex', gap: 8 }}>
             <select
               className="cb-input cb-select"
@@ -723,7 +723,7 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
               ))}
             </select>
             <input
-              id="ad-rec-phone"
+              id="addr-rec-phone"
               type="tel"
               className="cb-input"
               inputMode="numeric"
@@ -739,9 +739,9 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
         <h3 className="st-section-title" style={{ marginTop: 8 }}>Save as</h3>
 
         <div className="cb-field">
-          <label className="cb-label" htmlFor="ad-label">Label</label>
+          <label className="cb-label" htmlFor="addr-label">Label</label>
           <input
-            id="ad-label"
+            id="addr-label"
             type="text"
             className="cb-input"
             value={form.label}
@@ -749,14 +749,14 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
             placeholder="e.g., Dad's place"
             disabled={saving}
           />
-          <div className="ad-chip-row">
+          <div className="addr-chip-row">
             {LABEL_CHIPS.map(chip => {
               const active = form.label === chip
               return (
                 <button
                   key={chip}
                   type="button"
-                  className={`ad-chip${active ? ' ad-chip--active' : ''}`}
+                  className={`addr-chip${active ? ' addr-chip--active' : ''}`}
                   onClick={() => update('label', chip)}
                   disabled={saving}
                 >
@@ -767,7 +767,7 @@ function AddressForm({ hId, existing, onCancel, onSaved }: FormProps) {
           </div>
         </div>
 
-        <label className="ad-default-row">
+        <label className="addr-default-row">
           <input
             type="checkbox"
             checked={form.isDefault}

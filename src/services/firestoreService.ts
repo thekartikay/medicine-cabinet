@@ -1,25 +1,13 @@
-import {
-  addDoc,
-  collection,
-  doc,
-  deleteDoc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  runTransaction,
-  setDoc,
-  updateDoc,
-  serverTimestamp,
-  writeBatch,
-  query,
-  where,
-  orderBy,
-  limit,
-  arrayUnion,
-  Timestamp,
-} from 'firebase/firestore'
+// AK-176 — Firestore SDK is no longer a top-level value import. Every
+// Firestore primitive (doc, collection, getDoc, ..., Timestamp, ...) and the
+// db instance come from getFirestoreContext() at the call site. That keeps
+// the @firebase/firestore SDK out of the entry bundle (Vite chunk-splits it)
+// and ensures initializeFirestore + persistentLocalCache run exactly once,
+// memoized inside the context. No type-only import of firebase/firestore is
+// needed here — every Timestamp reference is a runtime value destructured
+// from the context inside the function body that uses it.
 import { updateProfile, type User as FirebaseUser } from 'firebase/auth'
-import { db } from '../lib/firebase'
+import { getFirestoreContext } from '../lib/firebase'
 import {
   userPath,
   householdPath,
@@ -76,6 +64,7 @@ import type {
 } from '../types'
 
 export async function createUserIfNew(user: FirebaseUser): Promise<void> {
+  const { db, doc, getDoc, setDoc, serverTimestamp } = await getFirestoreContext()
   const ref = doc(db, userPath(user.uid))
   const snap = await getDoc(ref)
   if (snap.exists()) return
@@ -91,6 +80,7 @@ export async function createUserIfNew(user: FirebaseUser): Promise<void> {
 }
 
 export async function getUserDoc(uid: string): Promise<AppUser | null> {
+  const { db, doc, getDoc } = await getFirestoreContext()
   const snap = await getDoc(doc(db, userPath(uid)))
   if (!snap.exists()) return null
   return snap.data() as AppUser
@@ -103,6 +93,7 @@ export async function updateUserProfile(
   uid: string,
   updates: { displayName?: string; phone?: string; email?: string },
 ): Promise<void> {
+  const { db, doc, setDoc, serverTimestamp } = await getFirestoreContext()
   await setDoc(
     doc(db, userPath(uid)),
     { ...updates, updatedAt: serverTimestamp() },
@@ -126,6 +117,8 @@ export async function updateDisplayNameEverywhere(
   const trimmed = displayName.trim()
   if (!trimmed) throw new Error('Display name cannot be empty')
 
+  // Each delegate-call awaits getFirestoreContext() internally; no direct
+  // Firestore primitives needed here.
   await Promise.all([
     updateProfile(user, { displayName: trimmed }),
     updateUserProfile(uid, { displayName: trimmed }),
@@ -143,6 +136,7 @@ export async function updateDisplayNameEverywhere(
 export async function getHousehold(
   hId: string,
 ): Promise<{ hId: string; name: string } | null> {
+  const { db, doc, getDoc } = await getFirestoreContext()
   const snap = await getDoc(doc(db, householdPath(hId)))
   if (!snap.exists()) return null
   const data = snap.data()
@@ -152,6 +146,7 @@ export async function getHousehold(
 // Returns the cId of the household's default cabinet, creating it if it doesn't exist.
 // Uses a deterministic cId (`${hId}-default`) so concurrent calls are idempotent.
 export async function getOrCreateDefaultCabinet(hId: string): Promise<string> {
+  const { db, doc, getDoc, setDoc, serverTimestamp } = await getFirestoreContext()
   const cId = `${hId}-default`
   const ref = doc(db, cabinetPath(hId, cId))
   const snap = await getDoc(ref)
@@ -162,6 +157,7 @@ export async function getOrCreateDefaultCabinet(hId: string): Promise<string> {
 }
 
 export async function getCabinetItems(hId: string, cId: string): Promise<CabinetItem[]> {
+  const { db, collection, getDocs } = await getFirestoreContext()
   const snap = await getDocs(collection(db, itemsCollectionPath(hId, cId)))
   // AK-150 — Client-side filter for soft-deleted items. Truthy disposedAt
   // (any Timestamp) is excluded; undefined and null both pass through.
@@ -192,6 +188,7 @@ export async function addCabinetItem(
     masterDbId?: string | null
   },
 ): Promise<string> {
+  const { db, doc, setDoc, serverTimestamp } = await getFirestoreContext()
   const iId = crypto.randomUUID()
   await setDoc(doc(db, itemPath(hId, cId, iId)), {
     ...data,
@@ -220,6 +217,7 @@ export async function updateCabinetItemInteractionWarning(
     | Omit<NonNullable<CabinetItem['interactionWarning']>, 'checkedAt'>
     | null,
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   await updateDoc(doc(db, itemPath(hId, cId, iId)), {
     interactionWarning:
       warning === null
@@ -253,6 +251,7 @@ export async function updateCabinetItem(
     expiryDate?: string | null
   },
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   await updateDoc(doc(db, itemPath(hId, cId, iId)), {
     ...updates,
     updatedAt: serverTimestamp(),
@@ -279,6 +278,7 @@ export async function deleteCabinetItem(
   cId: string,
   iId: string,
 ): Promise<void> {
+  const { db, doc, deleteDoc } = await getFirestoreContext()
   await deleteDoc(doc(db, itemPath(hId, cId, iId)))
 }
 
@@ -293,6 +293,7 @@ export async function disposeCabinetItem(
   cId: string,
   iId: string,
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   await updateDoc(doc(db, itemPath(hId, cId, iId)), {
     disposedAt: serverTimestamp(),
   })
@@ -335,6 +336,7 @@ export async function addStock(
   const notesClamped = args.notes ? args.notes.slice(0, 200) : null
   const eventId = crypto.randomUUID()
 
+  const { db, doc, runTransaction, serverTimestamp } = await getFirestoreContext()
   await runTransaction(db, async tx => {
     const itemRef = doc(db, itemPath(hId, cId, iId))
     const itemSnap = await tx.get(itemRef)
@@ -378,38 +380,54 @@ export async function addStock(
   })
 }
 
+// AK-176 — Subscription pattern. The cancelled flag is load-bearing: if the
+// caller's cleanup runs before getFirestoreContext() resolves (e.g. an effect
+// unmounts during init), we never attach the listener. The returned
+// unsubscribe stays synchronous so every calling useEffect is unchanged.
 export function subscribeCabinetItems(
   hId: string,
   cId: string,
   onData: (items: CabinetItem[]) => void,
   onError?: (error: Error) => void,
 ): () => void {
-  return onSnapshot(
-    collection(db, itemsCollectionPath(hId, cId)),
-    // AK-150 — Same filter as getCabinetItems; keeps disposed items out of
-    // every consumer's `items` state.
-    snap => onData(
-      snap.docs
-        .map(d => d.data() as CabinetItem)
-        .filter(i => !i.disposedAt),
-    ),
-    err => onError?.(err),
-  )
+  let realUnsub: (() => void) | undefined
+  let cancelled = false
+  getFirestoreContext()
+    .then(({ db, collection, onSnapshot }) => {
+      if (cancelled) return
+      realUnsub = onSnapshot(
+        collection(db, itemsCollectionPath(hId, cId)),
+        // AK-150 — Same filter as getCabinetItems; keeps disposed items out of
+        // every consumer's `items` state.
+        snap => onData(
+          snap.docs
+            .map(d => d.data() as CabinetItem)
+            .filter(i => !i.disposedAt),
+        ),
+        err => onError?.(err),
+      )
+    })
+    .catch(err => {
+      console.warn('subscribeCabinetItems: deferred Firestore init failed', err)
+      onError?.(err as Error)
+    })
+  return () => { cancelled = true; realUnsub?.() }
 }
 
-// AK-125 \u2014 Case-insensitive prefix search against the masterDb catalogue.
+// AK-125 — Case-insensitive prefix search against the masterDb catalogue.
 // The Firestore index is on `nameLower` (lowercased copy of `name`), so the
 // user typing "metformin", "Metformin", or "METFORMIN" all hit the same
-// prefix bucket. Returns the raw MasterMedicine \u2014 the display name field
+// prefix bucket. Returns the raw MasterMedicine — the display name field
 // is still `name`, not `nameLower`; the lowercased field is query-only.
 export async function searchMasterDb(queryStr: string): Promise<MasterMedicine[]> {
   const trimmed = queryStr.trim()
   if (!trimmed) return []
   const queryLower = trimmed.toLowerCase()
+  const { db, collection, query, where, limit, getDocs } = await getFirestoreContext()
   const q = query(
     collection(db, 'masterDb'),
     where('nameLower', '>=', queryLower),
-    where('nameLower', '<', queryLower + '\uf8ff'),
+    where('nameLower', '<', queryLower + ''),
     limit(10),
   )
   const snap = await getDocs(q)
@@ -444,6 +462,7 @@ export async function createTreatment(
     category: TreatmentCategory
   },
 ): Promise<string> {
+  const { db, doc, setDoc, serverTimestamp } = await getFirestoreContext()
   const tId = crypto.randomUUID()
   await setDoc(doc(db, treatmentPath(hId, tId)), {
     tId,
@@ -475,6 +494,7 @@ export async function getActiveTreatmentMedicines(
   memberId: string,
 ): Promise<Array<{ cabinetItemId: string; displayName: string; medicineId: string }>> {
   try {
+    const { db, collection, query, where, getDocs } = await getFirestoreContext()
     const treatments = await getDocs(
       query(
         collection(db, treatmentsCollectionPath(hId)),
@@ -530,6 +550,7 @@ export async function addRegimen(
     timezone?: string
   },
 ): Promise<string> {
+  const { db, doc, writeBatch, serverTimestamp } = await getFirestoreContext()
   const rId = crypto.randomUUID()
   const summary = computeScheduleSummary(data.scheduleType, data.scheduleDays, data.slots)
   const batch = writeBatch(db)
@@ -559,14 +580,26 @@ export function subscribeTreatments(
   onData: (treatments: Treatment[]) => void,
   onError?: (error: Error) => void,
 ): () => void {
-  return onSnapshot(
-    collection(db, treatmentsCollectionPath(hId)),
-    snap => onData(snap.docs.map(d => d.data() as Treatment)),
-    err => onError?.(err),
-  )
+  let realUnsub: (() => void) | undefined
+  let cancelled = false
+  getFirestoreContext()
+    .then(({ db, collection, onSnapshot }) => {
+      if (cancelled) return
+      realUnsub = onSnapshot(
+        collection(db, treatmentsCollectionPath(hId)),
+        snap => onData(snap.docs.map(d => d.data() as Treatment)),
+        err => onError?.(err),
+      )
+    })
+    .catch(err => {
+      console.warn('subscribeTreatments: deferred Firestore init failed', err)
+      onError?.(err as Error)
+    })
+  return () => { cancelled = true; realUnsub?.() }
 }
 
 export async function getHouseholdMembers(hId: string): Promise<HouseholdMember[]> {
+  const { db, collection, getDocs } = await getFirestoreContext()
   const snap = await getDocs(collection(db, membersCollectionPath(hId)))
   return snap.docs.map(d => d.data() as HouseholdMember)
 }
@@ -585,6 +618,7 @@ export async function createPendingInvite(
     createdBy: string
   },
 ): Promise<string> {
+  const { db, doc, setDoc, Timestamp } = await getFirestoreContext()
   const inviteId = crypto.randomUUID()
   const now = Timestamp.now()
   const expiresAt = Timestamp.fromMillis(now.toMillis() + 7 * 24 * 60 * 60 * 1000)
@@ -607,6 +641,7 @@ export async function createPendingInvite(
 
 // Convenience: resolves the household default cabinet and returns its items.
 export async function getDefaultCabinetItems(hId: string): Promise<CabinetItem[]> {
+  // Both delegates await getFirestoreContext() internally.
   const cId = await getOrCreateDefaultCabinet(hId)
   return getCabinetItems(hId, cId)
 }
@@ -614,6 +649,7 @@ export async function getDefaultCabinetItems(hId: string): Promise<CabinetItem[]
 // Computes today applicable dose slots from active treatments and their regimens.
 // Client-side fallback — the canonical source is todaySummary/{date} written by Cloud Functions.
 export async function loadTodaysDoses(hId: string): Promise<DoseSlotDisplay[]> {
+  const { db, collection, query, where, getDocs } = await getFirestoreContext()
   const today = todayISTString()
   const todayDow = new Date(today + "T00:00:00").getDay()
 
@@ -684,6 +720,7 @@ export async function loadTodaysDoses(hId: string): Promise<DoseSlotDisplay[]> {
 
 // Loads all dose logs scheduled for today across active treatments.
 export async function loadTodaysLogs(hId: string): Promise<DoseLog[]> {
+  const { db, collection, query, where, getDocs } = await getFirestoreContext()
   const today = todayISTString()
   const treatsSnap = await getDocs(
     query(collection(db, treatmentsCollectionPath(hId)), where("status", "==", "active")),
@@ -759,6 +796,7 @@ export async function logDose(
       )
   const scheduledAt = new Date(`${args.scheduledDate}T${args.scheduledTime}:00+05:30`)
 
+  const { db, doc, runTransaction, serverTimestamp, Timestamp } = await getFirestoreContext()
   return runTransaction(db, async tx => {
     // ── ALL READS FIRST (Firestore transaction requirement) ──
     const householdRef = doc(db, householdPath(hId))
@@ -877,6 +915,7 @@ export async function getPrnDosesToday(
   rId: string,
   dateStr: string,
 ): Promise<number> {
+  const { db, collection, query, where, getDocs } = await getFirestoreContext()
   const q = query(
     collection(db, dosesCollectionPath(hId, tId)),
     where('rId', '==', rId),
@@ -931,6 +970,8 @@ export async function adminMarkAsTaken(
       )
   const scheduledAt = new Date(`${args.scheduledDate}T${args.scheduledTime}:00+05:30`)
 
+  const ctx = await getFirestoreContext()
+  const { db, doc, runTransaction, setDoc, serverTimestamp, Timestamp } = ctx
   return runTransaction(db, async tx => {
     const householdRef = doc(db, householdPath(hId))
     const householdSnap = await tx.get(householdRef)
@@ -1043,20 +1084,31 @@ export function subscribeNotifications(
   onData: (notifs: Notification[]) => void,
   onError?: (error: Error) => void,
 ): () => void {
-  // 30-day window keeps the panel feed bounded. Single-field where + orderBy
-  // on createdAt is auto-indexed; no firestore.indexes.json change needed.
-  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-  const q = query(
-    collection(db, notificationsCollectionPath(hId)),
-    where('createdAt', '>=', Timestamp.fromDate(cutoff)),
-    orderBy('createdAt', 'desc'),
-    limit(50),
-  )
-  return onSnapshot(
-    q,
-    snap => onData(snap.docs.map(d => d.data() as Notification)),
-    err => onError?.(err),
-  )
+  let realUnsub: (() => void) | undefined
+  let cancelled = false
+  getFirestoreContext()
+    .then(({ db, collection, query, where, orderBy, limit, onSnapshot, Timestamp }) => {
+      if (cancelled) return
+      // 30-day window keeps the panel feed bounded. Single-field where + orderBy
+      // on createdAt is auto-indexed; no firestore.indexes.json change needed.
+      const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+      const q = query(
+        collection(db, notificationsCollectionPath(hId)),
+        where('createdAt', '>=', Timestamp.fromDate(cutoff)),
+        orderBy('createdAt', 'desc'),
+        limit(50),
+      )
+      realUnsub = onSnapshot(
+        q,
+        snap => onData(snap.docs.map(d => d.data() as Notification)),
+        err => onError?.(err),
+      )
+    })
+    .catch(err => {
+      console.warn('subscribeNotifications: deferred Firestore init failed', err)
+      onError?.(err as Error)
+    })
+  return () => { cancelled = true; realUnsub?.() }
 }
 
 export async function markNotificationRead(
@@ -1064,6 +1116,7 @@ export async function markNotificationRead(
   notifId: string,
   uid: string,
 ): Promise<void> {
+  const { db, doc, updateDoc, arrayUnion } = await getFirestoreContext()
   await updateDoc(doc(db, notificationPath(hId, notifId)), {
     readBy: arrayUnion(uid),
   })
@@ -1077,6 +1130,7 @@ export async function markAllNotificationsRead(
 ): Promise<void> {
   const unread = notifs.filter(n => !n.readBy.includes(uid))
   if (unread.length === 0) return
+  const { db, doc, writeBatch, arrayUnion } = await getFirestoreContext()
   const batch = writeBatch(db)
   for (const n of unread) {
     batch.update(doc(db, notificationPath(hId, n.notifId)), {
@@ -1098,6 +1152,7 @@ export async function syncMemberDisplayName(
   uid: string,
   displayName: string,
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   await updateDoc(doc(db, memberPath(hId, uid)), {
     displayName,
     updatedAt: serverTimestamp(),
@@ -1111,6 +1166,7 @@ export async function getMemberDisplayName(
   hId: string,
   uid: string,
 ): Promise<string | null> {
+  const { db, doc, getDoc } = await getFirestoreContext()
   const snap = await getDoc(doc(db, memberPath(hId, uid)))
   if (!snap.exists()) return null
   const data = snap.data() as { displayName?: string | null }
@@ -1129,11 +1185,22 @@ export function subscribeTodaySummary(
   onData: (summary: TodaySummary | null) => void,
   onError?: (error: Error) => void,
 ): () => void {
-  return onSnapshot(
-    doc(db, todaySummaryPath(hId, dateStr)),
-    snap => onData(snap.exists() ? (snap.data() as TodaySummary) : null),
-    err => onError?.(err),
-  )
+  let realUnsub: (() => void) | undefined
+  let cancelled = false
+  getFirestoreContext()
+    .then(({ db, doc, onSnapshot }) => {
+      if (cancelled) return
+      realUnsub = onSnapshot(
+        doc(db, todaySummaryPath(hId, dateStr)),
+        snap => onData(snap.exists() ? (snap.data() as TodaySummary) : null),
+        err => onError?.(err),
+      )
+    })
+    .catch(err => {
+      console.warn('subscribeTodaySummary: deferred Firestore init failed', err)
+      onError?.(err as Error)
+    })
+  return () => { cancelled = true; realUnsub?.() }
 }
 
 // ── Restock requests ────────────────────────────────────────
@@ -1146,23 +1213,34 @@ export function subscribeRestockRequests(
   onData: (requests: RestockRequest[]) => void,
   onError?: (error: Error) => void,
 ): () => void {
-  const q = query(
-    collection(db, restockRequestsCollectionPath(hId)),
-    where('status', '==', 'pending'),
-  )
-  return onSnapshot(
-    q,
-    snap => {
-      const list = snap.docs.map(d => d.data() as RestockRequest)
-      list.sort((a, b) => {
-        const am = a.requestedAt?.toMillis() ?? 0
-        const bm = b.requestedAt?.toMillis() ?? 0
-        return bm - am
-      })
-      onData(list)
-    },
-    err => onError?.(err),
-  )
+  let realUnsub: (() => void) | undefined
+  let cancelled = false
+  getFirestoreContext()
+    .then(({ db, collection, query, where, onSnapshot }) => {
+      if (cancelled) return
+      const q = query(
+        collection(db, restockRequestsCollectionPath(hId)),
+        where('status', '==', 'pending'),
+      )
+      realUnsub = onSnapshot(
+        q,
+        snap => {
+          const list = snap.docs.map(d => d.data() as RestockRequest)
+          list.sort((a, b) => {
+            const am = a.requestedAt?.toMillis() ?? 0
+            const bm = b.requestedAt?.toMillis() ?? 0
+            return bm - am
+          })
+          onData(list)
+        },
+        err => onError?.(err),
+      )
+    })
+    .catch(err => {
+      console.warn('subscribeRestockRequests: deferred Firestore init failed', err)
+      onError?.(err as Error)
+    })
+  return () => { cancelled = true; realUnsub?.() }
 }
 
 export async function updateRestockRequest(
@@ -1170,6 +1248,7 @@ export async function updateRestockRequest(
   requestId: string,
   status: 'fulfilled' | 'dismissed',
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   await updateDoc(doc(db, restockRequestPath(hId, requestId)), {
     status,
     resolvedAt: serverTimestamp(),
@@ -1186,6 +1265,7 @@ export async function pauseTreatment(
   tId: string,
   currentUid: string,
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp, arrayUnion, Timestamp } = await getFirestoreContext()
   const entry: PauseEntry = {
     pausedAt: Timestamp.now(),
     resumedAt: null,
@@ -1205,6 +1285,7 @@ export async function resumeTreatment(
   hId: string,
   tId: string,
 ): Promise<void> {
+  const { db, doc, runTransaction, serverTimestamp, Timestamp } = await getFirestoreContext()
   const ref = doc(db, treatmentPath(hId, tId))
   await runTransaction(db, async tx => {
     const snap = await tx.get(ref)
@@ -1234,6 +1315,7 @@ export async function endTreatment(
   hId: string,
   tId: string,
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   await updateDoc(doc(db, treatmentPath(hId, tId)), {
     status: 'completed',
     endDate: serverTimestamp(),
@@ -1251,6 +1333,7 @@ export async function updateTreatment(
   tId: string,
   updates: { name?: string },
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   const payload: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
   }
@@ -1292,6 +1375,7 @@ export async function updateRegimen(
     }
   }
 
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   const payload: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
   }
@@ -1326,6 +1410,7 @@ export async function loadLogsForDateRange(
   fromDate: string,
   toDate: string,
 ): Promise<DoseLog[]> {
+  const { db, collection, query, where, getDocs } = await getFirestoreContext()
   const treatsSnap = await getDocs(collection(db, treatmentsCollectionPath(hId)))
   const all: DoseLog[] = []
   await Promise.all(treatsSnap.docs.map(async tDoc => {
@@ -1354,6 +1439,7 @@ export async function getActiveTreatmentsWithRegimensForMember(
   memberId: string,
 ): Promise<Array<{ treatment: Treatment; regimens: Regimen[] }>> {
   try {
+    // loadAllActiveRegimens awaits getFirestoreContext() internally.
     const { treatments, regimensByTreatment } = await loadAllActiveRegimens(hId)
     return treatments
       .filter(t => t.memberId === memberId && t.status === 'active')
@@ -1393,6 +1479,7 @@ export async function logRetroactiveDoses(
   },
 ): Promise<void> {
   if (args.slots.length === 0) return
+  const { db, doc, writeBatch, serverTimestamp, Timestamp } = await getFirestoreContext()
   const batch = writeBatch(db)
   for (const s of args.slots) {
     const ref = doc(db, dosePath(hId, tId, s.slotId))
@@ -1450,6 +1537,7 @@ export async function recordConflictAcknowledgement(
     acknowledgedByName: string
   },
 ): Promise<void> {
+  const { db, collection, addDoc, serverTimestamp } = await getFirestoreContext()
   await addDoc(
     collection(db, `households/${hId}/treatments/${tId}/conflictAcknowledgements`),
     {
@@ -1481,6 +1569,7 @@ export async function recordInteractionAcknowledgement(
     acknowledgedByName: string
   },
 ): Promise<void> {
+  const { db, collection, addDoc, serverTimestamp } = await getFirestoreContext()
   await addDoc(
     collection(db, `households/${hId}/treatments/${tId}/interactionAcknowledgements`),
     {
@@ -1493,6 +1582,7 @@ export async function recordInteractionAcknowledgement(
 export async function loadAllActiveRegimens(
   hId: string,
 ): Promise<{ treatments: Treatment[]; regimensByTreatment: Record<string, Regimen[]> }> {
+  const { db, collection, query, where, getDocs } = await getFirestoreContext()
   const treatsSnap = await getDocs(query(
     collection(db, treatmentsCollectionPath(hId)),
     where("status", "==", "active"),
@@ -1519,6 +1609,7 @@ export async function createRestockRequest(
     quantityAtRequest: number
   },
 ): Promise<string> {
+  const { db, doc, setDoc, serverTimestamp } = await getFirestoreContext()
   const requestId = crypto.randomUUID()
   await setDoc(doc(db, `households/${hId}/restockRequests/${requestId}`), {
     requestId,
@@ -1539,6 +1630,7 @@ export async function createRestockRequest(
 // Null when the user has never consented (first sign-in) or the
 // subcollection is unreadable (offline/permissions).
 export async function getConsentRecord(uid: string): Promise<ConsentRecord | null> {
+  const { db, collection, query, orderBy, limit, getDocs } = await getFirestoreContext()
   const q = query(
     collection(db, consentVersionPath(uid)),
     orderBy('consentedAt', 'desc'),
@@ -1555,6 +1647,7 @@ export async function getConsentRecord(uid: string): Promise<ConsentRecord | nul
 // A policy bump simply lands as a newer version doc; getConsentRecord
 // returns the latest by consentedAt desc.
 export async function recordConsent(uid: string, platform: string): Promise<void> {
+  const { db, collection, addDoc, serverTimestamp } = await getFirestoreContext()
   const appVersion = (import.meta.env.VITE_APP_VERSION as string | undefined) || 'dev'
   await addDoc(collection(db, consentVersionPath(uid)), {
     uid,
@@ -1576,6 +1669,7 @@ export async function updateUserPreferences(
     reminderMethod: 'whatsapp' | 'push' | 'both'
   }>,
 ): Promise<void> {
+  const { db, doc, setDoc } = await getFirestoreContext()
   await setDoc(doc(db, userPath(uid)), prefs, { merge: true })
 }
 
@@ -1609,6 +1703,7 @@ export async function addAddress(
     isDefault: boolean
   },
 ): Promise<string> {
+  const { db, doc, setDoc, serverTimestamp } = await getFirestoreContext()
   const addressId = crypto.randomUUID()
   await setDoc(doc(db, addressPath(hId, addressId)), {
     ...data,
@@ -1638,6 +1733,7 @@ export async function updateAddress(
     landmark?: string | null
   },
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   await updateDoc(doc(db, addressPath(hId, addressId)), {
     ...updates,
     updatedAt: serverTimestamp(),
@@ -1651,6 +1747,7 @@ export async function disposeAddress(
   hId: string,
   addressId: string,
 ): Promise<void> {
+  const { db, doc, updateDoc, serverTimestamp } = await getFirestoreContext()
   await updateDoc(doc(db, addressPath(hId, addressId)), {
     disposedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -1666,6 +1763,7 @@ export async function setDefaultAddress(
   hId: string,
   addressId: string,
 ): Promise<void> {
+  const { db, doc, runTransaction, serverTimestamp } = await getFirestoreContext()
   await runTransaction(db, async tx => {
     const householdRef = doc(db, householdPath(hId))
     const householdSnap = await tx.get(householdRef)
@@ -1693,21 +1791,34 @@ export function subscribeAddresses(
   onData: (addresses: Address[]) => void,
   onError?: (error: Error) => void,
 ): () => void {
-  return onSnapshot(
-    collection(db, addressesCollectionPath(hId)),
-    snap => {
-      const rows = snap.docs
-        .map(d => d.data() as Address)
-        .filter(a => !a.disposedAt)
-      onData(rows)
-    },
-    err => onError?.(err),
-  )
+  let realUnsub: (() => void) | undefined
+  let cancelled = false
+  getFirestoreContext()
+    .then(({ db, collection, onSnapshot }) => {
+      if (cancelled) return
+      realUnsub = onSnapshot(
+        collection(db, addressesCollectionPath(hId)),
+        snap => {
+          const rows = snap.docs
+            .map(d => d.data() as Address)
+            .filter(a => !a.disposedAt)
+          onData(rows)
+        },
+        err => onError?.(err),
+      )
+    })
+    .catch(err => {
+      console.warn('subscribeAddresses: deferred Firestore init failed', err)
+      onError?.(err as Error)
+    })
+  return () => { cancelled = true; realUnsub?.() }
 }
 
 export async function getAddresses(hId: string): Promise<Address[]> {
+  const { db, collection, getDocs } = await getFirestoreContext()
   const snap = await getDocs(collection(db, addressesCollectionPath(hId)))
   return snap.docs
     .map(d => d.data() as Address)
     .filter(a => !a.disposedAt)
 }
+
