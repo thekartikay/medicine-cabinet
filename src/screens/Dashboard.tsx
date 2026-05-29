@@ -1477,7 +1477,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
             This prevents tab subscriptions from running on initial Dashboard
             load AND avoids re-subscribing every time the user toggles tabs. */}
         {visitedTabs.has('cabinet') && (
-          <div style={{ display: activeTab === 'cabinet' ? 'contents' : 'none' }}>
+          <div style={{ display: activeTab === 'cabinet' ? 'block' : 'none' }}>
             <CabinetTab
               hId={household.hId}
               readOnly={role === 'member'}
@@ -1488,7 +1488,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
           </div>
         )}
         {visitedTabs.has('treatments') && (
-          <div style={{ display: activeTab === 'treatments' ? 'contents' : 'none' }}>
+          <div style={{ display: activeTab === 'treatments' ? 'block' : 'none' }}>
             <TreatmentsTab
               hId={household.hId}
               currentUid={user.uid}
@@ -1498,7 +1498,7 @@ export function Dashboard({ user, household, role, onAccountDeleted }: Props) {
           </div>
         )}
         {visitedTabs.has('settings') && (
-          <div style={{ display: activeTab === 'settings' ? 'contents' : 'none' }}>
+          <div style={{ display: activeTab === 'settings' ? 'block' : 'none' }}>
             {role === 'member' ? (
               <MemberSettings
                 user={user}
