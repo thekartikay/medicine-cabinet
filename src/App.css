@@ -6769,7 +6769,7 @@
 
 /* ─── AK-163 Delivery Addresses ──────────────────────────────────────── */
 
-.ad-list {
+.addr-list {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -6778,24 +6778,24 @@
   gap: 12px;
 }
 
-.ad-card {
+.addr-card {
   padding: 14px 16px;
 }
 
-.ad-card-header {
+.addr-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 4px;
 }
 
-.ad-card-label {
+.addr-card-label {
   font-weight: 600;
   font-size: 15px;
   color: var(--gray-900, #0F172A);
 }
 
-.ad-default-badge {
+.addr-default-badge {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -6806,26 +6806,26 @@
   color: var(--sprout-700, #047857);
 }
 
-.ad-card-recipient {
+.addr-card-recipient {
   font-size: 13px;
   color: var(--gray-700, #334155);
   margin-bottom: 4px;
 }
 
-.ad-card-address {
+.addr-card-address {
   font-size: 13px;
   color: var(--gray-600, #475569);
   line-height: 1.4;
 }
 
-.ad-card-landmark {
+.addr-card-landmark {
   font-size: 12px;
   color: var(--gray-500, #64748B);
   font-style: italic;
   margin-top: 4px;
 }
 
-.ad-card-actions {
+.addr-card-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -6834,7 +6834,7 @@
   border-top: 0.5px solid var(--gray-100, #E2E8F0);
 }
 
-.ad-card-action {
+.addr-card-action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -6847,20 +6847,20 @@
   cursor: pointer;
 }
 
-.ad-card-action:hover {
+.addr-card-action:hover {
   background: var(--gray-50, #F8FAFC);
 }
 
-.ad-card-action--danger {
+.addr-card-action--danger {
   color: var(--rose-700, #B91C1C);
   border-color: var(--rose-200, #FECACA);
 }
 
-.ad-card-action--danger:hover {
+.addr-card-action--danger:hover {
   background: var(--rose-50, #FEF2F2);
 }
 
-.ad-map {
+.addr-map {
   width: 100%;
   height: 300px;
   border-radius: 12px;
@@ -6868,14 +6868,14 @@
   background: var(--gray-100, #E2E8F0);
 }
 
-.ad-chip-row {
+.addr-chip-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
 }
 
-.ad-chip {
+.addr-chip {
   font-size: 12px;
   padding: 6px 10px;
   border-radius: 9999px;
@@ -6885,17 +6885,17 @@
   cursor: pointer;
 }
 
-.ad-chip:hover {
+.addr-chip:hover {
   background: var(--gray-50, #F8FAFC);
 }
 
-.ad-chip--active {
+.addr-chip--active {
   background: var(--blueberry-50, #EFF6FF);
   color: var(--blueberry-700, #1D4ED8);
   border-color: var(--blueberry-300, #93C5FD);
 }
 
-.ad-default-row {
+.addr-default-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -6905,7 +6905,7 @@
   cursor: pointer;
 }
 
-.ad-default-row input[type="checkbox"] {
+.addr-default-row input[type="checkbox"] {
   width: 18px;
   height: 18px;
   cursor: pointer;
