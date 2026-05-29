@@ -4361,6 +4361,13 @@
   border-color: var(--daybreak);
 }
 
+/* AK-161 — Inert "coming soon" rows on the Profile screen. Present in the
+   layout but non-interactive; dimmed so they read as disabled. */
+.pf-row-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Language bottom-sheet rows */
 .st-lang-list {
   list-style: none;

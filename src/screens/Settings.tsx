@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { signOut, type User as FirebaseUser } from 'firebase/auth'
+import { type User as FirebaseUser } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
-import { Bell, MessageCircle, Globe, UserPlus, LogOut, Check, User as UserIcon, MapPin } from 'lucide-react'
+import { Bell, MessageCircle, Globe, UserPlus, Check, User as UserIcon, MapPin } from 'lucide-react'
 import i18n from '../lib/i18n'
 import { auth, functions } from '../lib/firebase'
 import {
@@ -11,7 +11,6 @@ import {
 } from '../services/firestoreService'
 import type { AppUser, HouseholdMember } from '../types'
 import { InviteMember, computeJoinCode } from './InviteMember'
-import { DeleteAccountSection } from './DeleteAccountSection'
 import { AdminMemberView } from './AdminMemberView'
 import { Profile } from './Profile'
 import { Addresses } from './Addresses'
@@ -124,6 +123,7 @@ export function SettingsTab({ user, role, hId, householdName, currentUid, curren
         hId={hId}
         role={role}
         onBack={() => setView('list')}
+        onAccountDeleted={onAccountDeleted}
       />
     )
   }
@@ -347,19 +347,7 @@ export function SettingsTab({ user, role, hId, householdName, currentUid, curren
             <span>Invite member</span>
           </button>
         )}
-
-        <button
-          type="button"
-          className="st-signout-row"
-          onClick={() => signOut(auth)}
-        >
-          <LogOut size={16} />
-          <span>Sign out</span>
-        </button>
       </section>
-
-      {/* ─── Section 5 — Account & Privacy (MC-017a) ──────────────── */}
-      <DeleteAccountSection onDeleted={onAccountDeleted} />
 
       {import.meta.env.DEV && (
         <div style={{

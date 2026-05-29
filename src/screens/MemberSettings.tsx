@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react'
-import { signOut, type User as FirebaseUser } from 'firebase/auth'
-import { Bell, MessageCircle, Globe, LogOut, Check, User as UserIcon } from 'lucide-react'
+import { type User as FirebaseUser } from 'firebase/auth'
+import { Bell, MessageCircle, Globe, Check, User as UserIcon } from 'lucide-react'
 import i18n from '../lib/i18n'
-import { auth } from '../lib/firebase'
 import { getUserDoc, updateUserPreferences } from '../services/firestoreService'
 import type { AppUser } from '../types'
-import { DeleteAccountSection } from './DeleteAccountSection'
 import { Profile } from './Profile'
 
 interface Props {
@@ -78,6 +76,7 @@ export function MemberSettings({ user, hId, role, currentUid, currentUserName, o
         hId={hId}
         role={role}
         onBack={() => setView('list')}
+        onAccountDeleted={onAccountDeleted}
       />
     )
   }
@@ -158,19 +157,6 @@ export function MemberSettings({ user, hId, role, currentUid, currentUserName, o
           <span className="st-row-chev" aria-hidden="true">›</span>
         </button>
       </section>
-
-      {/* Sign out */}
-      <button
-        type="button"
-        className="st-signout-row"
-        onClick={() => signOut(auth)}
-      >
-        <LogOut size={16} />
-        <span>Sign out</span>
-      </button>
-
-      {/* Account & Privacy (MC-017a) */}
-      <DeleteAccountSection onDeleted={onAccountDeleted} />
 
       {/* Language bottom sheet */}
       {showLangSheet && (

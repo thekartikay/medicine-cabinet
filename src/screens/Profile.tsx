@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
-import type { User as FirebaseUser } from 'firebase/auth'
-import { ChevronLeft, Copy, Check } from 'lucide-react'
+import { signOut, type User as FirebaseUser } from 'firebase/auth'
+import { ChevronLeft, Copy, Check, LogOut, CreditCard, HelpCircle } from 'lucide-react'
 import i18n from '../lib/i18n'
+import { auth } from '../lib/firebase'
 import {
   getUserDoc,
   updateDisplayNameEverywhere,
   updateUserPreferences,
 } from '../services/firestoreService'
 import type { AppUser } from '../types'
+import { DeleteAccountSection } from './DeleteAccountSection'
 
 type Role = 'admin' | 'member' | 'caregiver'
 
@@ -32,6 +34,7 @@ interface Props {
   hId: string | null
   role: Role
   onBack: () => void
+  onAccountDeleted: () => void
 }
 
 // Account ID is shown for support look-ups. We truncate so it fits on one line
@@ -44,7 +47,7 @@ function truncateUid(uid: string): string {
 // Shared Profile screen used by both SettingsTab (admin/caregiver host) and
 // MemberSettings. Both hosts manage their own view-stack and render this
 // component when the user taps "Profile"; onBack returns them to their list.
-export function Profile({ user, hId, role, onBack }: Props) {
+export function Profile({ user, hId, role, onBack, onAccountDeleted }: Props) {
   const [, setAppUser] = useState<AppUser | null>(null)
   const [loadError, setLoadError] = useState('')
 
@@ -263,6 +266,49 @@ export function Profile({ user, hId, role, onBack }: Props) {
       >
         {saving ? 'Saving…' : 'Save'}
       </button>
+
+      {/* ─── Sign out (AK-161) ─────────────────────────────────────── */}
+      <button
+        type="button"
+        className="st-signout-row"
+        onClick={() => signOut(auth)}
+      >
+        <LogOut size={16} />
+        <span>Sign out</span>
+      </button>
+
+      {/* ─── More (AK-161 — inert "coming soon" stubs) ─────────────── */}
+      <section className="db-card st-card">
+        <button
+          type="button"
+          className="st-row-button pf-row-disabled"
+          disabled
+          aria-disabled="true"
+        >
+          <span className="st-toggle-icon st-toggle-icon--robin"><CreditCard size={16} /></span>
+          <div className="st-toggle-text">
+            <span className="st-toggle-label">Plan &amp; Billing</span>
+            <span className="st-toggle-sub">Coming soon</span>
+          </div>
+          <span className="st-row-chev" aria-hidden="true">›</span>
+        </button>
+        <button
+          type="button"
+          className="st-row-button pf-row-disabled"
+          disabled
+          aria-disabled="true"
+        >
+          <span className="st-toggle-icon st-toggle-icon--blueberry"><HelpCircle size={16} /></span>
+          <div className="st-toggle-text">
+            <span className="st-toggle-label">Help &amp; Support</span>
+            <span className="st-toggle-sub">Coming soon</span>
+          </div>
+          <span className="st-row-chev" aria-hidden="true">›</span>
+        </button>
+      </section>
+
+      {/* ─── Account & Privacy (MC-017a / AK-56) ───────────────────── */}
+      <DeleteAccountSection onDeleted={onAccountDeleted} />
     </div>
   )
 }
