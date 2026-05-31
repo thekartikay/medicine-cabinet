@@ -7,7 +7,7 @@ firebase.initializeApp({
   projectId: "medicab-dev-2025",
   storageBucket: "medicab-dev-2025.firebasestorage.app",
   messagingSenderId: "800406331344",
-  appId: "1:800406331344:web:bcfd9be556c7ea48a323d5"
+  appId: "1:800406331344:web:e6d45e0498431078a323d5"
 })
 
 const messaging = firebase.messaging()
