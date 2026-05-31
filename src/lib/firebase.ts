@@ -45,6 +45,20 @@ export const app = initializeApp(firebaseConfig);
 // register on the same global namespace and Phone OTP fails on production
 // with "Invalid site key or not loaded in api.js". v3 lives on the separate
 // window.grecaptcha namespace, so the two coexist cleanly.
+
+// AK-180 root cause was silent failure when this env var was
+// present-but-mismatched. This warn-on-empty restores the early
+// signal AK-117 removed. Hard-fail on misconfig comes in AK-181
+// Phase 2 (startup health check). Intentionally outside the !DEV gate
+// below so the signal fires at module load in every environment.
+if (!import.meta.env.VITE_RECAPTCHA_SITE_KEY) {
+  // eslint-disable-next-line no-console
+  console.error(
+    '[App Check] VITE_RECAPTCHA_SITE_KEY is missing — App Check will not ' +
+    'initialize correctly. Check .env.local against .env.example.',
+  );
+}
+
 if (!import.meta.env.DEV && typeof window !== 'undefined') {
   const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined;
   if (siteKey) {
