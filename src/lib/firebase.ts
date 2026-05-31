@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import {
   initializeAppCheck,
   ReCaptchaV3Provider,
+  getToken,
 } from 'firebase/app-check';
 import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth';
 // AK-176 — @firebase/firestore is no longer a top-level value import. The
@@ -62,10 +63,41 @@ if (!import.meta.env.VITE_RECAPTCHA_SITE_KEY) {
 if (!import.meta.env.DEV && typeof window !== 'undefined') {
   const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined;
   if (siteKey) {
-    initializeAppCheck(app, {
+    const appCheck = initializeAppCheck(app, {
       provider: new ReCaptchaV3Provider(siteKey),
       isTokenAutoRefreshEnabled: true,
     });
+
+    // AK-181 Phase 2: startup health check. Verifies App Check can
+    // mint tokens at boot, surfacing failures with a specific Firebase
+    // error code instead of silently failing at first Cloud Function
+    // call. Fire-and-forget so app init isn't blocked. forceRefresh
+    // bypasses the in-memory token cache so we actually hit the App
+    // Check exchange endpoint — without it, a stale-but-valid cached
+    // token could mask a broken config, which was the AK-180 failure
+    // mode. Silence on success (only the failure path logs).
+    void (async () => {
+      try {
+        await getToken(appCheck, /* forceRefresh */ true);
+      } catch (err) {
+        const code = (err as { code?: string })?.code ?? 'unknown';
+        const message = (err as { message?: string })?.message
+          ?? String(err);
+        const siteKeyTail =
+          (import.meta.env.VITE_RECAPTCHA_SITE_KEY ?? '').slice(-6)
+          || 'EMPTY';
+        const appIdTail =
+          (import.meta.env.VITE_FIREBASE_APP_ID ?? '').slice(-6)
+          || 'EMPTY';
+        // eslint-disable-next-line no-console
+        console.error(
+          '[App Check] Health check FAILED at boot — Cloud Functions ' +
+          'will reject requests with "Unauthenticated" once cached ' +
+          'tokens expire. See AK-181 / AK-180.',
+          { errorCode: code, errorMessage: message, siteKeyTail, appIdTail }
+        );
+      }
+    })();
   }
 }
 
