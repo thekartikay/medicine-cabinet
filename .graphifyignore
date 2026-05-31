@@ -1,0 +1,47 @@
+# Build outputs and dependencies
+node_modules/
+functions/node_modules/
+functions/lib/
+dist/
+build/
+
+# Capacitor native projects — excluded from the graph for now to reduce
+# noise (mostly vendored/generated Capacitor code + generated config).
+# Note on tracking status (corrected from original plan): ios/ is actually
+# gitignored in this repo (not yet scaffolded), and only specific android/
+# subdirs are gitignored while the rest of android/ is tracked. Either way
+# we keep both out of the graph. Reconsider if we later need FCM SDK version
+# tracking or native config in the graph (selectively un-ignore subdirs).
+ios/
+android/
+
+# Firebase emulator state and local caches
+emulator-data/
+.firebase/
+
+# Graphify's own output
+graphify-out/
+
+# Misc
+*.zip
+*.log
+.DS_Store
+
+# JSON lockfiles — hundreds of meaningless keys (packages, resolved,
+# integrity, license) that dominate god-node rankings and obscure
+# real architectural abstractions. Lockfiles aren't code; they're
+# vendored dependency state.
+# Glob (not exact name) so it also catches Finder/iCloud duplicate
+# variants like "package-lock 2.json" — a tracked dup currently in this
+# repo that otherwise re-pollutes the god-node ranking.
+package-lock*.json
+functions/package-lock*.json
+yarn.lock
+pnpm-lock.yaml
+
+# TypeScript incremental build state — not source
+*.tsbuildinfo
+
+# Untracked HTML scratch artifact (kept on disk per user decision,
+# but excluded from the graph)
+MediCab Prototype Standalone.html
