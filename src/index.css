@@ -1,11 +1,14 @@
 :root {
-  /* MediCab design tokens */
-  --blueberry: #106470;
-  --robin:     #5DC1C8;
-  --sprout:    #5AB648;
-  --sunshine:  #FFB800;
+  /* MediCab design tokens — Reimagined palette (AK-191).
+     Robin + Blueberry were already on-spec; sprout/sunshine/daybreak are
+     reconciled here to the Reimagined Success green / Warning amber / Danger
+     red, matching the hex values already hardcoded across App.css. */
+  --blueberry: #106470; /* Reimagined Blueberry */
+  --robin:     #5DC1C8; /* Reimagined Robin */
+  --sprout:    #639922; /* Reimagined Success green (was #5AB648) */
+  --sunshine:  #EF9F27; /* Reimagined Warning amber (was #FFB800) */
   --tangerine: #FF7033;
-  --daybreak:  #FF8985;
+  --daybreak:  #E24B4A; /* Reimagined Danger red (was #FF8985) */
 
   --gray-50:  #F9FAFB;
   --gray-100: #F3F4F6;
@@ -26,6 +29,20 @@
   --surface: #ffffff;
   --border: var(--gray-200);
   --error: var(--daybreak);
+
+  /* Reimagined semantic aliases (AK-191). Reference these by intent rather
+     than by colour name; they resolve to the reconciled palette above. */
+  --success: var(--sprout);   /* #639922 */
+  --warning: var(--sunshine); /* #EF9F27 */
+  --danger:  var(--daybreak); /* #E24B4A */
+
+  /* Reimagined layout invariants (AK-191) — cards 24px, inputs/buttons pill,
+     mobile-first centered container. Kept as tokens so the Phase-1 component
+     library (AK-192) can reference them. */
+  --radius-card: 24px;
+  --radius-pill: 9999px;
+  --max-w-md:    28rem; /* 448px — mobile-first centered max width */
+
   /* Distinct, tactile shadows so cards visibly sit above the surface */
   --shadow:        0 4px 14px rgba(16, 100, 112, 0.10);
   --shadow-float:  0 8px 28px rgba(16, 100, 112, 0.18);
