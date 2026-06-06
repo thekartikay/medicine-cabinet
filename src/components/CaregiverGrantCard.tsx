@@ -86,7 +86,6 @@ export function CaregiverGrantCard({ memberId, grant, onRevoked, onError }: Prop
       onRevoked(grant.grantId, now)
       setConfirmOpen(false)
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('revokeCaregiverGrant failed:', err)
       onError(describeRevokeError(err))
     } finally {

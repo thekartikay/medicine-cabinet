@@ -139,7 +139,6 @@ export function CaregiverShareModal({ memberId, memberName, adminName, onClose, 
       onCreated()
     } catch (err) {
       // Never log the magicLink or grantSecret. Only surface the error itself.
-      // eslint-disable-next-line no-console
       console.error('createCaregiverGrant failed:', err)
       const { message, canRetry } = errorFor(err)
       setState({ kind: 'error', message, canRetry })

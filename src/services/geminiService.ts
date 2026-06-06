@@ -50,13 +50,11 @@ async function callProxy(
       // functions/unavailable). The Firebase code is the most useful machine-
       // readable bit; surface that on `message`.
       if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
         console.error(`[geminiService] ${source} failed:`, err.code, err.message)
       }
       return { kind: 'error', message: err.code }
     }
     if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
       console.error(`[geminiService] ${source} failed (network):`, err)
     }
     return { kind: 'error', message: 'network_error' }
