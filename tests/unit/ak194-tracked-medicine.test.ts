@@ -324,6 +324,12 @@ describe('zero / expired / missing stock', () => {
     expect(r.supplyState).toBe('good')
   })
 
+  it('surfaces quantityOnHand from the item (0 when missing)', () => {
+    expect(project({ item: item({ quantityOnHand: 42 }) }).quantityOnHand).toBe(42)
+    expect(project({ item: item({ quantityOnHand: 0 }) }).quantityOnHand).toBe(0)
+    expect(project({ item: null }).quantityOnHand).toBe(0)
+  })
+
   it('missing cabinet item → empty strength, zero supply, name from regimen', () => {
     const r = project({ item: null })
     expect(r.strength).toBe('')

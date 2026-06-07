@@ -29,6 +29,7 @@ export interface TrackedMedicine {
   drug: string // medicine name
   strength: string // e.g. "500mg"
   perDay: number // scheduled doses per (dosing) day
+  quantityOnHand: number // units currently in the cabinet (0 when no item)
   supplyDays: number // whole days of supply at the daily consumption rate
   todayStatus: TodayStatus
   todaySlots: TrackedSlot[]
@@ -177,6 +178,7 @@ export function projectTrackedMedicine(
     drug: resolveDrugName(input),
     strength: item?.strength ?? '',
     perDay,
+    quantityOnHand,
     supplyDays,
     todayStatus,
     todaySlots,
