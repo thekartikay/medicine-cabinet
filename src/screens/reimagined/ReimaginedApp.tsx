@@ -16,6 +16,7 @@ import type { ReactElement } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { Bell, ClipboardList, Package, ShoppingCart, Users } from 'lucide-react'
 import { Avatar, BottomNav, Header, Icon, Sheet, type BottomNavItem } from '../../components/reimagined'
+import { ReimaginedProvider } from '../../contexts/ReimaginedCtx'
 import { PeopleScreen } from './PeopleScreen'
 import { CabinetScreen } from './CabinetScreen'
 import { DigestScreen } from './DigestScreen'
@@ -74,6 +75,7 @@ export function ReimaginedApp() {
   const ActiveScreen = SCREENS[tab]
 
   return (
+    <ReimaginedProvider>
     <div
       className="rmg-app"
       style={{
@@ -113,5 +115,6 @@ export function ReimaginedApp() {
         </p>
       </Sheet>
     </div>
+    </ReimaginedProvider>
   )
 }
