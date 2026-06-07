@@ -1822,3 +1822,85 @@ export async function getAddresses(hId: string): Promise<Address[]> {
     .filter(a => !a.disposedAt)
 }
 
+// ── AK-195 — real-time subscriptions for the Reimagined context ───────────────
+// Additive only: these mirror the existing subscribe* pattern (deferred
+// Firestore init + cancellable unsubscribe) and back the parallel
+// ReimaginedCtx. The existing app's data flow does not use them.
+
+export function subscribeHouseholdMembers(
+  hId: string,
+  onData: (members: HouseholdMember[]) => void,
+  onError?: (error: Error) => void,
+): () => void {
+  let realUnsub: (() => void) | undefined
+  let cancelled = false
+  getFirestoreContext()
+    .then(({ db, collection, onSnapshot }) => {
+      if (cancelled) return
+      realUnsub = onSnapshot(
+        collection(db, membersCollectionPath(hId)),
+        snap => onData(snap.docs.map(d => d.data() as HouseholdMember)),
+        err => onError?.(err),
+      )
+    })
+    .catch(err => {
+      console.warn('subscribeHouseholdMembers: deferred Firestore init failed', err)
+      onError?.(err as Error)
+    })
+  return () => { cancelled = true; realUnsub?.() }
+}
+
+export function subscribeRegimens(
+  hId: string,
+  tId: string,
+  onData: (regimens: Regimen[]) => void,
+  onError?: (error: Error) => void,
+): () => void {
+  let realUnsub: (() => void) | undefined
+  let cancelled = false
+  getFirestoreContext()
+    .then(({ db, collection, onSnapshot }) => {
+      if (cancelled) return
+      realUnsub = onSnapshot(
+        collection(db, regimensCollectionPath(hId, tId)),
+        snap => onData(snap.docs.map(d => d.data() as Regimen)),
+        err => onError?.(err),
+      )
+    })
+    .catch(err => {
+      console.warn('subscribeRegimens: deferred Firestore init failed', err)
+      onError?.(err as Error)
+    })
+  return () => { cancelled = true; realUnsub?.() }
+}
+
+// Today's dose logs for one treatment. Filters on scheduledDate (single-field
+// index, no composite needed) so the listener only carries the current day.
+export function subscribeTodayLogs(
+  hId: string,
+  tId: string,
+  today: string,
+  onData: (logs: DoseLog[]) => void,
+  onError?: (error: Error) => void,
+): () => void {
+  let realUnsub: (() => void) | undefined
+  let cancelled = false
+  getFirestoreContext()
+    .then(({ db, collection, query, where, onSnapshot }) => {
+      if (cancelled) return
+      realUnsub = onSnapshot(
+        query(
+          collection(db, dosesCollectionPath(hId, tId)),
+          where('scheduledDate', '==', today),
+        ),
+        snap => onData(snap.docs.map(d => d.data() as DoseLog)),
+        err => onError?.(err),
+      )
+    })
+    .catch(err => {
+      console.warn('subscribeTodayLogs: deferred Firestore init failed', err)
+      onError?.(err as Error)
+    })
+  return () => { cancelled = true; realUnsub?.() }
+}
+
