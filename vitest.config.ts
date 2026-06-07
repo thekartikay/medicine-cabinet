@@ -19,7 +19,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['tests/unit/**/*.test.ts'],
+    include: ['tests/unit/**/*.test.{ts,tsx}'],
     setupFiles: ['./tests/vitest.setup.ts'],
     // Each test does at least one Firestore emulator round-trip (~tens of ms)
     // and the first one waits past the 500 ms init delay. 30s is generous.
