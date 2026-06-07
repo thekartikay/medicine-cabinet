@@ -18,6 +18,12 @@ const RESEND_SECONDS = 60
 const LOCKOUT_SECONDS = 5 * 60
 const MAX_OTP_ATTEMPTS = 3
 
+// AK-206 — Phone OTP is hidden in the closed-beta build (flag defaults false).
+// The underlying flow fails with auth/invalid-app-credential (see AK-184);
+// deeper fix deferred to post-AK-205. All Phone OTP code below is intact and
+// re-surfaces when VITE_PHONE_OTP_ENABLED === 'true' (local diagnostic builds).
+const PHONE_OTP_ENABLED = import.meta.env.VITE_PHONE_OTP_ENABLED === 'true'
+
 export function SignIn() {
   const [view, setView] = useState<View>('options')
   // AK-118 — phone is composed from (dialCode, localPhone) instead of a single
@@ -225,17 +231,19 @@ export function SignIn() {
               <span className="si-pill-chevron" aria-hidden="true">›</span>
             </button>
 
-            <button
-              className="si-pill-btn"
-              onClick={() => { setView('phone-input'); clearAuthError() }}
-              disabled={loading}
-            >
-              <span className="si-pill-icon-wrap si-pill-icon--phone">
-                <PhoneIcon />
-              </span>
-              <span className="si-pill-label">Continue with phone</span>
-              <span className="si-pill-chevron" aria-hidden="true">›</span>
-            </button>
+            {PHONE_OTP_ENABLED && (
+              <button
+                className="si-pill-btn"
+                onClick={() => { setView('phone-input'); clearAuthError() }}
+                disabled={loading}
+              >
+                <span className="si-pill-icon-wrap si-pill-icon--phone">
+                  <PhoneIcon />
+                </span>
+                <span className="si-pill-label">Continue with phone</span>
+                <span className="si-pill-chevron" aria-hidden="true">›</span>
+              </button>
+            )}
 
             <p className="si-caregiver-hint">
               Joining as a caregiver? Open your invite link from WhatsApp or email.
@@ -243,7 +251,7 @@ export function SignIn() {
           </>
         )}
 
-        {view === 'phone-input' && (
+        {PHONE_OTP_ENABLED && view === 'phone-input' && (
           <>
             <h2 className="si-panel-title">Enter your phone number</h2>
             <label className="si-label" htmlFor="phone-input">Mobile number</label>
@@ -292,7 +300,7 @@ export function SignIn() {
           </>
         )}
 
-        {view === 'otp-input' && (
+        {PHONE_OTP_ENABLED && view === 'otp-input' && (
           <>
             <h2 className="si-panel-title">Enter verification code</h2>
             <p className="si-hint">Code sent to {dialCode} {localPhone.trim()}</p>
@@ -388,8 +396,9 @@ export function SignIn() {
         <p className="si-footer">🔒 Secure Encrypted Access</p>
       </div>
 
-      {/* Invisible reCAPTCHA anchor — must be in DOM before signInWithPhoneNumber */}
-      <div id="recaptcha-container" />
+      {/* Invisible reCAPTCHA anchor — must be in DOM before signInWithPhoneNumber.
+          AK-206: only mounted when Phone OTP is enabled. */}
+      {PHONE_OTP_ENABLED && <div id="recaptcha-container" />}
 
       <AuthErrorModal error={authError} onClose={clearAuthError} />
     </div>
