@@ -10,7 +10,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { ReimaginedApp } from '../../src/screens/reimagined/ReimaginedApp'
-import { CabinetScreen } from '../../src/screens/reimagined/CabinetScreen'
 import { DigestScreen } from '../../src/screens/reimagined/DigestScreen'
 import { RestockScreen } from '../../src/screens/reimagined/RestockScreen'
 
@@ -48,9 +47,8 @@ describe('ReimaginedApp shell', () => {
   })
 })
 
-describe('placeholder screens (Cabinet/Digest/Restock)', () => {
+describe('placeholder screens (Digest/Restock)', () => {
   it.each([
-    [CabinetScreen, 'Cabinet', 'Every medicine in one place.'],
     [DigestScreen, 'Digest', 'Today at a glance.'],
     [RestockScreen, 'Restock', 'What to reorder.'],
   ])('%o renders its title and subtitle', (Screen, title, subtitle) => {
