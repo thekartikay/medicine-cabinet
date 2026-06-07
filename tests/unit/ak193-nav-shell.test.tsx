@@ -10,7 +10,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { ReimaginedApp } from '../../src/screens/reimagined/ReimaginedApp'
-import { PeopleScreen } from '../../src/screens/reimagined/PeopleScreen'
 import { CabinetScreen } from '../../src/screens/reimagined/CabinetScreen'
 import { DigestScreen } from '../../src/screens/reimagined/DigestScreen'
 import { RestockScreen } from '../../src/screens/reimagined/RestockScreen'
@@ -32,7 +31,9 @@ describe('ReimaginedApp shell', () => {
 
   it('defaults to the People tab (active + its screen)', () => {
     expect(out).toContain('aria-current="page"')
-    expect(out).toContain('The people you care for.')
+    // AK-196 — the People tab now renders MyPeople. Under the provider's initial
+    // (pre-auth) state it shows the loading skeleton rather than a placeholder.
+    expect(out).toContain('aria-label="Loading people"')
   })
 
   it('exposes the notification bell and a profile avatar', () => {
@@ -47,9 +48,8 @@ describe('ReimaginedApp shell', () => {
   })
 })
 
-describe('placeholder screens', () => {
+describe('placeholder screens (Cabinet/Digest/Restock)', () => {
   it.each([
-    [PeopleScreen, 'People', 'The people you care for.'],
     [CabinetScreen, 'Cabinet', 'Every medicine in one place.'],
     [DigestScreen, 'Digest', 'Today at a glance.'],
     [RestockScreen, 'Restock', 'What to reorder.'],
